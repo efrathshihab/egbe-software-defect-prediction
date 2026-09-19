@@ -1,0 +1,2055 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+% ==================== Packages ====================
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{url}
+\usepackage{float}
+\usepackage{stfloats}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+% Temporary placeholder command.
+% Replace every \placeholder{...} with the actual paper content.
+\newcommand{\placeholder}[1]{%
+\par\noindent\textit{[#1]}\par
+}
+\renewcommand\IEEEkeywordsname{Keywords}
+\begin{document}
+
+% ==================== Title ====================
+\title{EGBE: An Explainable Gradient Boosting Ensemble for Software Defect Prediction}
+
+% ==================== Authors ====================
+\author{%
+\begin{tabular}{@{}c@{\hspace{1.2cm}}c@{}}
+
+% First Author
+\shortstack[c]{
+1\textsuperscript{st} Efrath Hossain Shihab\\
+\textit{Department of Computer Science and Engineering}\\
+\textit{American International University-Bangladesh (AIUB)}\\
+Dhaka, Bangladesh\\
+22-47592-2@student.aiub.edu
+}
+&
+% Second Author
+\shortstack[c]{
+2\textsuperscript{nd} Jannatul Ferdousi Nisa\\
+\textit{Department of Computer Science and Engineering}\\
+\textit{American International University-Bangladesh (AIUB)}\\
+Dhaka, Bangladesh\\
+22-48041-2@student.aiub.edu
+}
+
+\\[1.2em]
+
+% Third Author
+\shortstack[c]{
+3\textsuperscript{rd} Md. Abdul Ahad\\
+\textit{Department of Computer Science and Engineering}\\
+\textit{American International University-Bangladesh (AIUB)}\\
+Dhaka, Bangladesh\\
+22-49726-3@student.aiub.edu
+}
+&
+% Fourth Author
+\shortstack[c]{
+4\textsuperscript{th} S M Abdullah Shafi*\\
+\textit{Department of Computer Science}\\
+\textit{American International University-Bangladesh (AIUB)}\\
+Dhaka, Bangladesh\\
+shafi@aiub.edu
+}
+
+\end{tabular}%
+}
+\maketitle
+
+% ==================== Abstract ====================
+\begin{abstract}
+The software defect prediction (SDP) technique helps software quality assurance (SQA) team to allocate resources for software development testing efficiently by predicting those modules that are likely to be affected by defects before their release~\cite{yatish2019affected, ali2024ensemble}.
+But in practice, several challenges often prevent practical adoption, such as extreme class imbalance, experimental data leakage, obscure decision boundaries, performance drop in distribution shifts, and unexplained model fidelity~\cite{sottomayor2024survey, tantithamthavorn2019optimization}.
+To cope with those interconnected challenges, this paper proposes an end-to-end framework EGBE, which integrates the three most popular algorithms (extreme gradient boosting (XGBoost) [cite: 1], light gradient boosting machine (LightGBM) [cite: 2] and categorical boosting (CatBoost) [cite: 3] by combining equal soft-voting, leak-free out-of-fold (OOF) decision threshold optimization and dual-perspective explainability auditing.
+EGBE's evaluation is based on 73,395 file-level instances of nine open-source Apache projects, characterized by 65 metrics related to static code structure, process churn and developer ownership~\cite{yatish2019affected}.
+Experimental results show that use of the full 65-metric space obtains the best test performance (mean MCC = 0.4592 and PR-AUC = 0.5465), significantly outperforming the smaller subsets.Test results indicate that maintaining the full 65-metric space provides the best performance (mean MCC = 0.4592 and PR-AUC = 0.5465), significantly outperforming the smaller spaces.
+Optimization of decision thresholds in training OOF predictions increases defect recall from 34.36\% to 54.39\% and test MCC from 0.4118 to 0.4592 ($p = 0.0034$) without test-label leakage.
+CatBoost performs best on the observed test MCC (0.4566) while EGBE models show the best performance on probability ranking discrimination (ROC-AUC of 0.8626 and PR-AUC of 0.5435), with post-hoc tests performed with Holm correction, showing competitive performance among all models.
+In both chronological cross-release and strict cross-project settings, performance drops to mean MCCs of 0.3227 and 0.3351 respectively; both baseline transfer and unsupervised domain adaptation (CORAL and NNFilter) fall behind.
+Finally, dual XAI auditing shows that SHAP and LIME have moderate amount of overlap in local ranks (48.17\%), and high amount of agreement in the sign of the local ranks (96.00\%), meaning that both post-hoc explanations reliably capture the direction of the risk factors in code review triage.
+\end{abstract}
+
+% ==================== Keywords ====================
+\begin{IEEEkeywords}
+software defect prediction, ensemble learning, gradient boosting,
+explainable artificial intelligence, class imbalance, threshold optimization,
+cross-project prediction
+\end{IEEEkeywords}
+
+% ==================================================
+% I. INTRODUCTION
+% ==================================================
+\section{Introduction}
+\label{sec:introduction}
+
+Affected source code is the source code for which the software is prone to defects.Affected source code is the source code of software that is likely to contain defects.
+With the development of modern software systems, which often contain millions of lines of code, it is impossible to conduct exhaustive manual testing and complete regression testing~\cite{haldar2024interpretable}.
+In software quality assurance (SQA), having accurate predictive modelling can help prioritise code reviews, optimise the allocation of resources for testing, and identify potential defects early in the software development lifecycle, before they reach production environments~\cite{li2025modelaveraging}.
+
+Although many efforts in creating defect prediction pipelines have been made, several fundamental challenges still exist for real-world deployment of these pipelines~\cite{sottomayor2024survey, tantithamthavorn2019optimization}.
+The first challenge is that software repositories are inherently highly imbalanced, that is, the number of files in a repository that are defective is generally less than $10\%$ to $20\%$ of the total number of files (as reported in \cite{chicco2020mcc}).
+The standard classifiers that use an arbitrary decision cutoff of $0.50$ tend to classify the vast majority of the data as "clean" when the total number of "defect" and "clean" classes is not balanced.When the number of "defect" and "clean" classes are unbalanced, standard classifiers with an arbitrary decision cutoff of $0.50$ tend to classify the majority of the data as the "clean" class, which leads to high nominal accuracy but very poor defect recall~\cite{tantithamthavorn2019optimization}.
+Second, many published defect prediction pipelines train on the full data set or improperly isolated sets of validation data, causing data leakage and over-optimistic performance scores~\cite{tantithamthavorn2019optimization}.
+Third, as the codebase continuously evolves, concept drift happens, and the covariate shift is severe from one development team to another, models trained under standard within-project cross-validation (WPCV) suffer from significant drops in performance when it comes to forward-chaining cross-release defect prediction (CRDP) and cross-project defect prediction (CPDP) scenarios~\cite{sottomayor2024survey, turhan2009crosscompany}
+Finally, although the unique tree boosting ensembles produce good predictive accuracy, they are black boxes with no explanation of what has happened~\cite{ali2024ensemble}.
+Post hoc explainable AI (XAI) methods like SHAP~\cite{lundberg2017shap} and LIME~\cite{ribeiro2016lime} are being increasingly adopted; however, the consistency of attributions, inter-explainer agreement and their direction of influence have yet to be well established in defect prediction scenarios.
+
+In order to tackle these interrelated challenges, this paper proposes an equal soft voting architecture (\textbf{EGBE}: \textbf{E}xplainable \textbf{G}radient Boosting \textbf{E}nsemble), which combines three popular extreme learning architectures: extreme gradient boosting (XGBoost)~\cite{chen2016xgboost}, light gradient boosting machine (LightGBM)~\cite{ke2017lightgbm} and categorical boosting (CatBoost)~\cite{prokhorenkova2018catboost}.
+The framework is tightly controlled by leakage control, out-of-fold (OOF) decision threshold optimization and dual-perspective XAI auditing %.
+We empirically study 32 software releases from nine open-source Java software systems with 73,395 file instances and 65 software metrics related to static code attributes, software development process churn and developer ownership~\cite{yatish2019affected}.
+
+This study brings five main empirical and methodological contributions.
+To ensure the pipeline is leak-free, outer data is exclusively used for feature ranking, handling class-imbalance, hyperparameter tuning, and selecting decision thresholds.
+Second, our feature-space ablation shows that all 65-metric predictors are consistently better than the reduced versions, with the mean test MCC ($0.4592$) and PR-AUC ($0.5465$) being highest.
+Third, we show that optimizing decision thresholds on training OOF predictions significantly improves defect recall from $34.36\%$ to $54.39\%$ (+$20.03\%$) and test MCC from $0.4118$ to $0.4592$ ($p = 0.0034$), while preventing test-label leakage.
+Fourth, we stress test model generalizability for within-project, temporal cross-release (23 chronological tasks), and strict leave-one-project-out cross-project (9 target projects) settings, showing that direct ensemble transfer is able to achieve comparable or superior performance with respect to domain adaptation approaches like CORAL~\cite{sun2016coral} and NNFilter~\cite{turhan2009crosscompany}.
+Lastly, we audit the explanation fidelity in 104 matched instances with permutation SHAP and LIME and find that the top-10 feature ranks have moderate local overlap ($48.17\%$) but show outstanding directional sign agreement ($96.00\%$), resulting in reliable directional risk advice during code reviews.
+
+In Section~II, the related literature is reviewed, covering the areas of machine learning, class imbalance, cross-project prediction, and XAI for defect prediction. Formal research questions can be found in Section~III. The methodology and suggested framework of EGBE is explained in Section~IV. The experimental design and evaluation protocols are presented in Section~V. Section~VI presents the empirical results. The findings, trade-offs and application implications are discussed in Section~VII. Section~VIII discusses threats to validity, and Section~IX offers realistic suggestions for future research.
+
+% ==================================================
+% II. RELATED WORK
+% ==================================================
+\section{Related Work}
+\label{sec:related-work}
+
+\subsection{Machine Learning-Based Software Defect Prediction}
+Early software defect prediction (SDP) research relied on classical machine learning classifiers, such as Naive Bayes, Logistic Regression, Decision Trees, and Support Vector Machines (SVM), trained predominantly on static code attributes~\cite{ali2023featureselection}. To capture structural complexity, researchers incorporated object-oriented metrics, notably the Chidamber and Kemerer (CK) suite, alongside traditional McCabe cyclomatic complexity and Halstead software science attributes~\cite{haldar2024interpretable}. More recently, deep learning architectures, such as Convolutional Neural Networks (CNNs) and Tree-based LSTMs operating on Abstract Syntax Trees (ASTs), have been explored to extract semantic representations directly from source code. However, deep neural networks often suffer from high computational demands, hyperparameter sensitivity, and overfitting on smaller software releases. Consequently, gradient-boosted decision tree ensembles remain the prevailing choice in empirical software engineering, delivering superior classification accuracy and computational efficiency on tabular software metric datasets~\cite{ali2024ensemble, li2025modelaveraging}.
+
+
+
+\subsection{Ensemble Learning and Class-Imbalance Handling}
+Ensemble learning combines multiple base estimators to reduce predictive variance and avoid model-specific failure modes. State-of-the-art gradient tree-boosting algorithms, including XGBoost~\cite{chen2016xgboost}, LightGBM~\cite{ke2017lightgbm}, and CatBoost~\cite{prokhorenkova2018catboost}, have demonstrated strong defect prediction performance by modeling complex, non-linear metric interactions with built-in regularization~\cite{ali2024ensemble}. Ensemble construction typically uses either soft- or hard-voting schemes, or meta-learning stacking architectures~\cite{li2025modelaveraging}.
+
+A persistent obstacle in defect prediction is extreme class imbalance, where clean modules heavily outnumber defective files. Practitioners have adopted data-level resampling techniques, such as the Synthetic Minority Over-sampling Technique (SMOTE)~\cite{chawla2002smote} and Adaptive Synthetic Sampling (ADASYN)~\cite{he2008adasyn}, as well as algorithm-level cost-sensitive learning to penalize minority misclassifications~\cite{tantithamthavorn2019optimization}. Despite these techniques, most studies apply a static $0.50$ classification threshold, which severely impairs defect recall on skewed distributions. This reinforces the need for systematic threshold calibration and balanced metrics such as the Matthews Correlation Coefficient (MCC)~\cite{chicco2020mcc}.
+
+\subsection{Cross-Release and Cross-Project Defect Prediction}
+While within-project defect prediction (WPDP) using cross-validation is widely studied, practical software quality assurance requires models to generalize across time and repository boundaries~\cite{sottomayor2024survey, turhan2009crosscompany}. Cross-release defect prediction (CRDP) evaluates chronological forward-chaining performance—predicting defects in future versions using historical releases~\cite{yatish2019affected}. Here, continuous software evolution introduces concept drift as code refactoring and bug fixes shift underlying defect mechanisms over time.
+
+Cross-project defect prediction (CPDP) addresses newly established projects lacking historical defect data by transferring models trained on external repositories~\cite{turhan2009crosscompany}. CPDP suffers from pronounced covariate shift caused by differing team sizes, coding standards, and architectural designs~\cite{sottomayor2024survey}. Domain adaptation approaches, such as Correlation Alignment (CORAL)~\cite{sun2016coral} and nearest-neighbor instance filtering (NNFilter)~\cite{turhan2009crosscompany}, attempt to align source and target feature distributions. However, recent surveys report that unsupervised adaptation techniques do not consistently outperform direct model transfer under rigorous evaluation conditions~\cite{sottomayor2024survey}.
+
+\subsection{Explainable Software Defect Prediction}
+As machine learning models guide high-stakes software verification, the black-box nature of advanced tree ensembles has spurred demand for Explainable Artificial Intelligence (XAI)~\cite{haldar2024interpretable}. Model-agnostic post-hoc explainers, primarily Local Interpretable Model-agnostic Explanations (LIME)~\cite{ribeiro2016lime} and SHapley Additive exPlanations (SHAP)~\cite{lundberg2017shap}, are increasingly used to explain file-level risk. LIME trains local linear surrogate models around perturbed instances, whereas SHAP applies cooperative game theory to allocate marginal feature contributions. 
+
+Despite their popularity, the reliability of post-hoc explainers in software engineering remains under-examined: sampling stochasticity can cause local instability in LIME, and differing mathematical formulations between SHAP and LIME can generate divergent feature rankings~\cite{haldar2024interpretable}. Systematic assessments of explanation agreement, sign consistency, and cross-project stability are therefore essential to ensure actionable developer trust.
+
+\subsection{Research Gap Summary}
+Existing defect prediction literature exhibits five recurrent limitations:
+\begin{enumerate}
+    \item \textbf{Restricted Metric Dimensions:} Many benchmarks rely solely on static code metrics, discarding evolutionary code churn and developer ownership dynamics~\cite{ali2023featureselection, li2025modelaveraging}.
+    \item \textbf{Data Leakage in Optimization Pipelines:} Feature selection, class resampling, hyperparameter tuning, and threshold selection are frequently performed globally, inadvertently leaking test information~\cite{tantithamthavorn2019optimization}.
+    \item \textbf{Threshold Insensitivity:} Classifiers overwhelmingly retain the arbitrary $0.50$ cutoff, leading to deficient defect recall under class imbalance~\cite{chicco2020mcc}.
+    \item \textbf{Lack of Unified Cross-Context Evaluation:} Studies rarely evaluate models simultaneously across within-project, chronological cross-release, and strict leave-one-project-out cross-project protocols~\cite{yatish2019affected, sottomayor2024survey}.
+    \item \textbf{Unverified Explanation Fidelity:} Explanations are frequently accepted without auditing local stability, inter-explainer agreement, or directional consistency.
+\end{enumerate}
+
+The proposed EGBE framework resolves these gaps by: (i) integrating a comprehensive 65-metric space across code, process, and ownership dimensions; (ii) enforcing strict outer-split leakage control with out-of-fold (OOF) threshold optimization; (iii) evaluating forward-chaining temporal CRDP and strict leave-one-project-out CPDP; and (iv) auditing XAI fidelity across SHAP and LIME. Table~\ref{tab:literature-comparison} summarizes the positioning of EGBE relative to representative defect prediction studies.
+
+\begin{table*}[t]
+\caption{Literature Comparison Between Related SDP Studies and the Proposed EGBE Framework}
+\label{tab:literature-comparison}
+\centering
+\setlength{\tabcolsep}{4.5pt}
+\resizebox{\textwidth}{!}{%  
+\begin{tabular}{@{}lcccccccc@{}}
+\toprule
+\textbf{Study} & \textbf{Releases} & \textbf{Metric Dimensions} & \textbf{Base Learners} & \textbf{Threshold Opt.} & \textbf{Temporal CRDP} & \textbf{Strict CPDP} & \textbf{XAI Audit} & \textbf{Leakage Control} \\
+\midrule
+Yatish et al. (2019)~\cite{yatish2019affected} & 32 & Code, Process, Ownership & Random Forest & No & Yes & No & None & Partial \\
+Ali et al. (2023)~\cite{ali2023featureselection} & 10 & Code only & RF, NB, SVM & No & No & No & None & CV only \\
+Haldar \& Capretz (2024)~\cite{haldar2024interpretable} & 5 & Code, Process & Random Forest & No & No & No & LIME only & CV only \\
+Sotto-Mayor \& Kalech (2024)~\cite{sottomayor2024survey} & Various & Code only & Survey / Varied & No & No & Yes & None & Varied \\
+Ali et al. (2024)~\cite{ali2024ensemble} & 14 & Code only & Bagging, Boosting & No & No & No & None & CV only \\
+Li et al. (2025)~\cite{li2025modelaveraging} & 12 & Code only & Model Averaging & No & No & Yes & None & CV only \\
+\textbf{Proposed EGBE Framework} & \textbf{32} & \textbf{Code, Process, Ownership} & \textbf{XGB, LGBM, CatBoost} & \textbf{Yes (OOF)} & \textbf{Yes (23 tasks)} & \textbf{Yes (9 projects)} & \textbf{SHAP + LIME} & \textbf{Strict Outer-Split} \\
+\bottomrule
+\end{tabular}%
+} %
+\end{table*}
+
+% ==================================================
+% IV. METHODOLOGY
+% ==================================================
+\section{Methodology}
+
+\subsection{Dataset Description}
+
+\label{subsec:dataset-description}
+
+This study utilized a publicly available JIRA-based software defect
+dataset originally prepared by Yatish et al.~\cite{yatish2019} and
+distributed through the Rnalytica repository and the Large Defect
+Prediction Benchmark~\cite{tantithamthavorn2022benchmark}. The dataset
+contains file-level software instances collected from 32 releases of
+nine Java-based open-source projects: ActiveMQ, Camel, Derby, Groovy,
+HBase, Hive, JRuby, Lucene, and Wicket. These projects differ in size,
+development history, and defect distribution, providing a heterogeneous
+benchmark for evaluating software defect prediction models under
+within-project, cross-release, and cross-project settings.
+
+After consolidating the 32 releases, the dataset contained 73,395
+software instances. Among them, 66,215 instances were labelled as
+non-defective, while 7,180 instances were labelled as defective.
+Accordingly, the defective class represented approximately 9.78\% of
+the dataset, whereas the non-defective class represented 90.22\%.
+This distribution indicates a substantial class imbalance and makes
+conventional accuracy insufficient as the sole performance measure.
+
+The binary target variable was derived from the \texttt{RealBug}
+attribute. An instance was assigned to the defective class when the
+corresponding source file was associated with a confirmed post-release
+defect; otherwise, it was assigned to the non-defective class. Unlike
+defect labels created solely through heuristic issue-key matching, the
+\texttt{RealBug} labels consider the affected-release information
+recorded in the JIRA issue-tracking system~\cite{yatish2019}.
+
+Each software instance was represented using 65 numerical predictors.
+These predictors consisted of 54 code metrics, five process metrics,
+and six ownership metrics. The combination of these metric groups
+captures the structural characteristics of source code, its historical
+change activity, and the contribution patterns of software developers.
+Table~\ref{tab:dataset-summary} summarizes the principal characteristics
+of the dataset used in this study.
+
+\begin{table}[H]
+\caption{Summary of the JIRA-Based Defect Dataset}
+\label{tab:dataset-summary}
+\centering
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Characteristic} & \textbf{Value} \\
+\midrule
+Number of projects       & 9 \\
+Number of releases       & 32 \\
+Total instances          & 73,395 \\
+Non-defective instances  & 66,215 \\
+Defective instances      & 7,180 \\
+Non-defective proportion & 90.22\% \\
+Defective proportion     & 9.78\% \\
+Number of predictors     & 65 \\
+Target variable          & \texttt{RealBug} \\
+Prediction task          & Binary classification \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Software Metric Groups}
+
+\label{subsec:metric-groups}
+
+The dataset represents each software instance using 65 numerical
+predictors covering three complementary dimensions of software
+development: source-code characteristics, development-process history,
+and developer ownership. Specifically, the predictor set contains
+54 code metrics, five process metrics, and six ownership metrics.
+These metric groups allow the prediction models to consider not only
+the internal structure of a source file but also how frequently it has
+changed and how its development effort is distributed among
+contributors~\cite{yatish2019}.
+
+\subsubsection{Code Metrics}
+
+The first group consists of 54 static code metrics extracted using
+SciTools Understand. These metrics characterize different structural
+properties of a source file, including size, complexity, coupling,
+cohesion, inheritance, executable statements, declarations, control
+flow, input--output dependencies, and nesting depth.
+
+Representative size metrics include \texttt{CountLine},
+\texttt{CountLineCode}, \texttt{CountLineComment}, and
+\texttt{CountStmt}. Complexity-related attributes include
+\texttt{AvgCyclomatic}, \texttt{MaxCyclomatic}, and
+\texttt{SumCyclomatic}. Coupling, cohesion, and inheritance are
+represented through metrics such as \texttt{CountClassCoupled},
+\texttt{PercentLackOfCohesion}, \texttt{CountClassDerived}, and
+\texttt{MaxInheritanceTree}. Additional metrics capture method
+visibility, class and variable declarations, execution paths,
+input--output dependencies, and maximum nesting levels.
+
+Collectively, these metrics describe the internal structural
+characteristics of the software and provide indicators of code size
+and complexity that may be associated with defect proneness.
+
+\subsubsection{Process Metrics}
+
+The second group contains five process metrics:
+\texttt{COMM}, \texttt{ADEV}, \texttt{DDEV},
+\texttt{Added\_lines}, and \texttt{Del\_lines}. These metrics were
+derived from the version-control history of each software project.
+
+The \texttt{COMM} metric represents the commit activity associated
+with a file, while \texttt{ADEV} and \texttt{DDEV} characterize
+developer participation and diversity. The \texttt{Added\_lines} and
+\texttt{Del\_lines} metrics quantify code churn by measuring the
+amount of source code added to and deleted from a file throughout its
+development history. These process attributes capture the evolutionary
+characteristics of a software file that cannot be determined from a
+single static snapshot of its source code.
+
+\subsubsection{Ownership Metrics}
+
+The third group consists of six ownership metrics:
+\texttt{OWN\_LINE}, \texttt{OWN\_COMMIT},
+\texttt{MINOR\_COMMIT}, \texttt{MINOR\_LINE},
+\texttt{MAJOR\_COMMIT}, and \texttt{MAJOR\_LINE}. These metrics
+describe how development effort and responsibility are distributed
+among the developers who contributed to a file.
+
+The \texttt{OWN\_LINE} and \texttt{OWN\_COMMIT} metrics quantify the
+concentration of file ownership based on contributed lines and commits,
+respectively. The remaining metrics characterize the numbers of major
+and minor contributors according to their line-level and commit-level
+contributions. Ownership metrics are useful because files developed by
+many occasional contributors may exhibit different defect patterns
+from files maintained primarily by a small group of major contributors.
+
+Table~\ref{tab:metric-groups} summarizes the three predictor groups.
+The binary target variable, \texttt{RealBug}, was excluded from the
+predictor set and was used only as the class label.
+
+\begin{table}[H]
+\caption{Summary of the Software Metric Groups}
+\label{tab:metric-groups}
+\centering
+\begin{tabular}{@{}lcp{4.7cm}@{}}
+\toprule
+\textbf{Group} & \textbf{Count} & \textbf{Scope and Examples} \\
+\midrule
+Code
+& 54
+& Size, complexity, coupling, cohesion, inheritance, declarations,
+execution paths, input--output dependencies, and nesting depth. \\
+
+Process
+& 5
+& \texttt{COMM}, \texttt{ADEV}, \texttt{DDEV},
+\texttt{Added\_lines}, and \texttt{Del\_lines}. \\
+
+Ownership
+& 6
+& \texttt{OWN\_LINE}, \texttt{OWN\_COMMIT},
+\texttt{MINOR\_COMMIT}, \texttt{MINOR\_LINE},
+\texttt{MAJOR\_COMMIT}, and \texttt{MAJOR\_LINE}. \\
+\midrule
+\textbf{Total}
+& \textbf{65}
+& \textbf{Numerical predictor variables} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Data Cleaning and Preprocessing}
+\label{subsec:data-preprocessing}
+
+Prior to model development a master audit was carried out across all
+32 release-level CSV files. All expected were confirmed by the audit.
+No missing or additional files were found, only release files.
+Each release had the necessary \texttt{RealBug} target and the
+The same set of 65 predictors is used. The feature set and feature ordering were:
+also found to be the same for all releases.
+
+The 65 pre-defined code, process and ownership elements are used to generate the code for each release.
+The features were extracted to build the predictor matrix. The
+It is the same with File, HeuBug, HeuBugCount and
+Not included are "RealBugCount" columns as they were not
+This is included in the final predictor space. The \texttt{RealBug} attribute
+was not included among the predictors and was only employed for the purpose of creating the
+target variable. Therefore, all the cleaned releases are identical and each includes exactly
+There are 65 predictors and 1 binary target column.
+
+For all predictor values, they were transformed into numerical form as follows:
+\texttt{pd.to\_numeric} with invalid values coerced to missing values.
+The \texttt{RealBug} attribute was translated to numerical separately.
+Moulded and converted to a binary target. The following is an instance of
+The defective class (\(y=1\)) when
+If \(\texttt{RealBug}>0\) then it was assigned to the clean class, otherwise it was assigned to the RealBug class.
+(\(y=0\)).
+
+After the numbers were converted, each release was scanned for missing
+Predictor values, infinite values, non-numeric predictors,
+duplication of rows, loss of features, and inconsistent ordering of features.
+The audit revealed that none of the predictor values were missing and none of the values were infinite.
+Values, zero non-numeric predictor columns and zero duplicate rows
+across the 32 releases. Therefore, no value imputation, duplicate
+There was a need to remove the row (or delete it). The cleaning process preserved
+all 73,395 original instances, including 66,215 clean and 7,180
+defective instances.
+
+One cleaned csv file was created for each release with a
+consistent column order. Similarly, cleaned datasets were also saved in a
+Release-level data cache with the project name and release name.
+The predictor matrix, binary target, number of instances, and class counts.
+This standardized representation was then used in all parts of the country.
+Experiments within the project, temporal across release and across project experiments.
+
+Split was done without any scaling, feature selection or class resampling of the data, scaling or train--test split.
+splitting, or model training was performed during this initial cleaning
+stage. In later experiments, the parameters of scaling were needed, so they were rewritten.
+Only training data was used for the fitting of were. Specifically,
+Chi-square feature ranking was used for min--max scaling.
+standardization was used for recursive feature elimination and the
+The distance based and ADASYN procedures. The same fitted
+The validation or test was then transformed to the same.Then the same was transformed into the associated validation or test.
+partition, to prevent information from the evaluation data from
+influencing preprocessing.
+
+
+\subsection{Leakage-Control Strategy}
+\label{subsec:leakage-control}
+
+Data is kept strictly separated between model development and final evaluation.
+Data was kept along the entire experimental pipeline. For each of
+a stratified train--test split (with a ratio of 80:20) was established for the 32 releases
+The seeds were set to 42. The row numbers for each outer split
+These were saved and used again in the subsequent experiments. Therefore, the
+feature-selection, imbalance-handling, hyperparameter-optimization,
+ensemble-construction, and threshold-selection stages used only the
+outer training partition. The \(20\%\) test partition was
+It did not make any use of a component of the prediction pipeline.
+
+Inside a five-fold stratified Feature Selection (FS) was conducted.
+The outer training partition was used to perform the cross-validation procedure.
+In each fold, only a hybrid feature-ranking procedure was fitted within.
+Using the fold training subset. This procedure had both Chi-square and,
+XGBoost-importance, and recursive-feature-elimination rankings. The
+The scaler for the Chi-square ranking and the standard scaler
+The recursive feature elimination algorithm was also trained only on the required features.
+on the data of the fold training. The resulting feature ranking was used
+The All65, Top30, Top20 and Top15 feature sets on the were assessed to evaluate.
+corresponding fold-validation subset. The global feature-set
+The configuration was chosen by the average out-of-fold (OOF) MCC.
+across the 32 releases. Only untouched-tests were retained for performance.
+For final feature-ablation analysis, it was not determined if the data were indicative of the presence or absence of a specific feature.
+selected feature-set size.
+
+Handling of class-imbalance was done in the same manner as training only.
+The Original, SMOTE, ADASYN, and cost-sensitive configurations were
+Outer training was performed on the outer 50\% of the data, with the remaining 50% used for compared using OOF predictions generated from the outer training.
+partition. standardization and synthetic-sample, the values were between 0.5 and 1.5.The values for SMOTE and ADASYN ranged from 0.5 to 1.5.
+The generation were conducted independently in each training fold.
+In particular, the scaler was applied to the fold-training subset, and
+the fitted transformation was then applied to the 'data' subset of the data.
+fold-validation subset. The selected synthetic instances were only created from
+The processed data for the folds. No validation or test.
+Instances were sampled in instances of resampling. After an imbalance
+The same process was repeated for the other configuration when it was chosen.
+complete outer training partition before predicting the outer test
+partition.
+
+Hyperparameter optimization was also limited to the outer training
+data. Optuna optimized the hyperparameters of XGBoost, LightGBM and
+blue metric, achieved the highest performance of all models.In three-fold stratified OOF evaluation with MCC as blue metric, CatBoost model shows the best performance.
+optimization objective. The field trials of the 12 experiments were performed on
+per base learner and release. Optimal value of the selected
+OOF probabilities were generated using hyperparameters to create new probabilities of the five-fold.
+for ensemble development. These labels and performance scores are found on the outer-test label.
+The hyperparameters were not used in the selection phase. Furthermore, the
+A second-level five-fold weighted-ensemble analysis was used.
+Weights computed using an ensemble method that was cross fitted with respect to each
+A subset of the data (meta-training) was used for training, and the remaining data (meta-validation) was used for validation.
+subset. This would not allow ensemble weights to be optimized and
+The same development predictions were applied when evaluating.
+
+The selection of decision thresholds was done only on the basis of the training OOF.
+probabilities. Candidate thresholds from 0.05 to 0.95, with an increment
+Those with an of 0.01 were assessed using the maximization of MCC. F1 score was used as the
+If more than one threshold resulted in the same MCC, secondary criterion was used.
+Next, followed is the value "close" to the default value 0.50. Once selected,
+The number was benchmarked and used for the outer-test probabilities.
+Consequently, no test label was used to determine the classification
+threshold.
+
+All development decisions were made for the final within project evaluation.
+This is a problem that has been fixed prior to the units being refitted as base learners for the entire outer.
+training partition. The generated models provided the probabilities for
+The outermost test partition (the untouched one) and the one that was already selected (OOF).
+threshold was used to obtain the final class predictions. Model and
+ensemble comparisons were reported on the test data, but the final
+A similar equal soft-voting EGBE architecture was adopted.
+cross-fitted development OOF evidence not test performance.
+
+Leakage control was also ensured in the time and across projects.
+experiments. Temporal Cross-release defect prediction: Only earlier releases are used.
+The prediction of a later release was performed using releases of a project. Future
+The target-release labels and releases were not used in the training.
+threshold selection. For strict leave-one-project-out cross-project:For leave-one-project-out cross-project (strict):
+The entire target project was not included in the model, as was done in the prediction.
+training. The domain-adaptation method, imbalance configuration, and
+Leave-one-source-project-out cross validation (LOOP).The classification threshold was chosen by leave-one-source-project out cross validation (LOOP).
+The remaining eight source projects were used for out validation. CORAL and
+NNFilter was given the opportunity to have unlabeled target-feature values.
+the target labels were never employed, but only transductive unsupervised adaptation.
+For training, adaptation selection or threshold optimization.
+
+\subsection{Feature-Selection Strategy}
+\label{subsec:feature-selection}
+
+The predictive ability of the different features was assessed by a hybrid feature ranking approach.
+The contribution of the 65 software metrics. The strategy combined
+elimination were among the feature selection methods tested and employed.Feature selection techniques tested and used include chi-square ranking, XGBoost feature importance and recursive feature elimination.
+elimination (RFE). In both methods, the predictors were analyzed from a different
+The lists were then converted to ranks and the ranks added together to create a single.
+feature order.
+
+The min--max normalization was first fitted to the data set and then used for chi-square ranking.
+The sum of these training data transformed to be non-negative.The sum of all of the values of the predictor is transformed to be non-negative in these training data.
+range. Each feature and its binary defect is compared using the chi-square score.
+Afterwards this score was calculated and ranked: the higher, the better.
+In the second part, an XGBoost (XGBoost) classifier has been trained with the same
+The training partition, and the features were ranked based on their learned.
+importance values. The third component used RFE with a class-weighted
+logistic-regression estimator. Pre-RFE, predictors were:
+standardized with a standard scaler that is only trained on the training data.
+After discarding \(20\%\) of the features, \(80\%\) were left.After discarding 20% of the features, 80% of the features remain.
+complete ranking was obtained.
+
+Three ranking vectors were normalized independently of each other and given new values.
+equal importance. The hybrid score for feature \(j\) was:
+
+\begin{equation}
+H_j =
+\frac{
+\widetilde{r}_{j}^{\,\chi^2} +
+\widetilde{r}_{j}^{\,\mathrm{XGB}} +
+\widetilde{r}_{j}^{\,\mathrm{RFE}}
+}{3},
+\end{equation}
+
+where \(\widetilde{r}_{j}^{\,\chi^2}\),
+\(\widetilde{r}_{j}^{\,\mathrm{XGB}}\), and
+\(\widetilde{r}_{j}^{\,\mathrm{RFE}}\) represent the normalized ranks
+From the three methods, the following results were obtained: Lower hybrid scores for features were:
+Had more people get better ranks in the final. XGBoost and Chi-square
+If the hybrid scores were equal, a secondary ordering criterion was ranks.
+occurred.
+
+Four feature configurations were tested: \textit{All65} (all features), \textit{All63} (all features except 32-bit), \textit{Core} (defined below), and \textit{NoFeatures} (no features).
+all 65 predictors, and \textit{Top30}, \textit{Top20}, and
+Top30, Top20, and Top15, respectively, is the set of the top 30, 20, 15, respectively, features from the set.
+hybrid ranking, respectively. During five-fold stratified
+The procedure of ranking was fitted separately on each of the data sets using cross validation.
+The generated feature sets and their corresponding feature configurations were called as the fold-training subset.
+Tested on the corresponding fold-validation set. The global
+The configuration with the highest mean OOF MCC was chosen.
+OOF F1 and PR-AUC were secondary criteria with 32 releases. This
+The \textit{All65} configuration was chosen for development only comparison.
+Untouched-test performance was not used for the following experiments;
+To choose this option.
+
+
+\subsection{Class-Imbalance Handling}
+\label{subsec:class-imbalance}
+
+There were four class-imbalance strategies tested: \textit{Original},
+\textit{SMOTE}, \textit{ADASYN} and \textit{Cost-Sensitive}. The
+Unaltered, the natural class distribution was maintained.
+resampling. both of SMOTE and ADASYN created extra minority-class samples.
+Examples taken from training data. Before using these techniques, a
+The standard scaler was applied to the related training fold and then
+The used to code was for modifying its validation fold. If ADASYN was not able to generate
+When there were no valid samples, SMOTE was applied as a default.
+
+The strategy of cost-sensitive approach retained the same observations but
+Higher fines were imposed on the faulty class. The class weight was
+It is computed by dividing the number of instances for which the training is correct by the number of instances in which it is not correct. This
+\texttt{scale\_neg\_weight} for GBM.The ratio was provided via \texttt{scale\_pos\_weight} to XGBoost and
+The weights are specified as \texttt{class\_weights} in LightGBM and CatBoost.
+
+Five-fold OOF predictions were generated with each strategy, which were then compared.
+outer training partition. The configuration with the best OOF MCC was
+Selected, secondary criteria was F1 and PR-AUC. Scaling and
+The synthetic resampling was only done on the training set of each
+fold. There were no instances for validation or test in the
+resampling process. Once selected, the selected strategy was used on
+the rest of the training partition, and the test partition was left.
+Not changed to be evaluated at the end.
+
+
+\subsection{Gradient-Boosting Base Learners}
+\label{subsec:base-learners}
+
+Three gradient-boosting learners are proposed:
+XGBoost, LightGBM and CatBoost. These learners were chosen because
+They rely on different mechanisms of making trees and regularization,
+Giving alternative probability estimates for software defect
+prediction.
+
+XGBoost was added as a regularized gradient boosting learner that is capable of.
+of modelling nonlinear relationships and interactions among software
+metrics. It was programmed to have a binary logistic objective and
+histogram-based tree construction. LightGBM was chosen because of its ability to handle very imbalanced data sets.
+A histogram-based learning method which is both simple and fast to compute and is capable of capturing the patterns of complex, high-dimensional data.
+Apply optimized training during repeated cross-validation and hyperparameter.
+optimization. Employed a binary classification objective.
+
+CatBoost was added as it has a symmetric approach to tree building.
+The learning behaviour of provides a different behaviour than XGBoost and LightGBM. It
+was trained with objective Logloss to provide probabilistic
+defect predictions. This structural difference of the three learners
+Supplements a single boosting implementation and helps to reduce reliance.
+how they are incorporated into the EGBE soft voting ensemble.
+
+\subsection{Proposed EGBE Soft-Voting Ensemble}
+\label{subsec:egbe-ensemble}
+
+The proposed EGBE ensemble integrates the probability estimates
+generated by XGBoost, LightGBM, and CatBoost. Unlike hard voting, which
+combines predicted class labels, soft voting combines the probability
+assigned to the defective class. Each base learner contributed equally
+to the final ensemble probability.
+
+For an instance \(x_i\), let
+\(p_{\mathrm{XGB}}(x_i)\), \(p_{\mathrm{LGBM}}(x_i)\), and
+\(p_{\mathrm{CAT}}(x_i)\) denote the defective-class probabilities
+produced by XGBoost, LightGBM, and CatBoost, respectively. The EGBE
+probability was calculated as
+
+\begin{equation}
+p_{\mathrm{EGBE}}(x_i)
+=
+\frac{
+p_{\mathrm{XGB}}(x_i)
++
+p_{\mathrm{LGBM}}(x_i)
++
+p_{\mathrm{CAT}}(x_i)
+}{3}.
+\end{equation}
+
+The final class prediction was obtained by comparing the ensemble
+probability with the OOF-selected classification threshold \(\tau\):
+
+\begin{equation}
+\widehat{y}_i =
+\begin{cases}
+1, & \text{if } p_{\mathrm{EGBE}}(x_i) \geq \tau,\\
+0, & \text{if } p_{\mathrm{EGBE}}(x_i) < \tau,
+\end{cases}
+\end{equation}
+
+where \(1\) represents a defective instance and \(0\) represents a clean
+instance. The threshold \(\tau\) was selected exclusively from training
+OOF predictions and was subsequently applied to the untouched test
+probabilities.
+
+\subsection{Hyperparameter Optimization}
+\label{subsec:hyperparameter-optimization}
+
+Hyperparameter optimization was carried out independently for XGBoost,
+The result of using LightGBM and CatBoost with Optuna on the tree-structured Parzen is shown below.LightGBM and CatBoost with Optuna on the tree-structured Parzen are shown below.
+estimator sampler. Optimization trials: 12 for each learner and release.
+three-fold stratified cross-validation was performed on the
+outer training partition. The previous selected class imbalance:
+This was performed with the strategy constant.
+
+The search space was 180--420 estimators with a step for XGBoost.
+of 60, tree depths of 2--7, learning rates of 0.02--0.15, minimum child
+weights of 1--8, and subsample and column-sampling ratios of 0.65--1.00.
+The values of \(L_1\) and \(L_2\) regularization were set as the ranges were.
+\(10^{-4}\)--1 and \(10^{-2}\)--10, respectively. The same was used for lightGBM.
+The ranges of the estimator, learning-rate, sampling, and regularization approaches, all together
+with 15--63 leaves, tree depths of 3--10, and 10--50 minimum child
+samples. For CatBoost, they have used 180--420 iterations, depths
+of 4--8, learning rates of 0.02--0.15, \(L_2\) leaf regularization of
+1--10, random strengths of 0--2, and border counts of either 64 or 128.
+Logarithmic sampling was used for the learning-rate and regularization
+parameters where applicable.
+
+Each trial had their own OOF probabilities and then classified based on those probabilities.
+threshold using only the training data. A file was created using MCC as its optimization.
+For F1 and PR-AUC, these were kept as ancillary parameters.
+The parameters that resulted in the most optimal OOF MCC were chosen
+For each base learner. The tuned learners were then employed to create new
+The ensemble development five-fold OOF predictions were refitted on.
+The entire training partion for final test prediction. Test
+No hyperparameter/final ensemble was used.
+selection.
+
+\subsection{Out-of-Fold Threshold Optimization}
+\label{subsec:oof-threshold}
+
+Out of fold (OOF) probabilities created using outer training
+A 5-fold stratified cross-validation is used to obtain the partition. In each fold,
+the base learners were trained with four folds on the selected
+The imbalanced strategy and optimized hyperparameters. They then predicted
+The probabilities of the defective classes for the leftover validation fold.
+Probabilities from all five folds were weighted and averaged together to get:
+For each training instance, a model made a prediction for an instance that was not in the training set.
+Has been trained on this instance. The three basic probabilities were
+Then averaged to get the equal OOF probabilities.
+soft-voting EGBE.
+
+The candidate thresholds were analyzed for a range of 0.05 to 0.95 with an increment of
+of 0.01. The chosen threshold was the value which gave the maximum MCC on the
+training OOF predictions:
+
+\begin{equation}
+\tau^{*}
+=
+\underset{\tau \in \{0.05,0.06,\ldots,0.95\}}
+{\operatorname{arg\,max}}
+\;
+\operatorname{MCC}
+\left(
+\mathbf{y}_{\mathrm{train}},
+\mathbb{I}\!\left[
+\mathbf{p}_{\mathrm{OOF}} \geq \tau
+\right]
+\right).
+\end{equation}
+
+The threshold with the smallest number of children in the "additional children" group was chosen if more than one threshold yielded the same MCC.
+higher F1 score was selected. If there was a tie, then the number nearest to what it was would be the value.
+0.50 was retained. The threshold generated was set prior to final
+The probabilities for the untouched test were directly used for the evaluation.
+So, the end test labels were not used in threshold.
+selection.
+
+\subsection{Explainability and Explanation-Reliability Analysis}
+\label{subsec:xai-reliability}
+
+The final equal soft voting EGBE was explained using model agnostic.
+Permutation SHAP and LIME. Data set 1, which is the original dataset without any transformations.Data set 1, the original data set without any changes.
+ensemble’s probability of fault, not to the individual
+base learners. The analysis is global SHAP and 20 is used for all 32 releases.
+A random selection of 10 test and 25 training instances were used.
+as background set. Five sets of permutation cycles were employed, which led to
+655 models per explained instance. Global importance was
+calculated from the mean absolute SHAP value of each feature and
+All releases will come normalized.
+
+Data on 9 matched detailed SHAP–LIME reliability analysis was performed.
+releases. Up to 3 examples were chosen from each confusion-matrix
+The classification of those data points is called a true positive, true negative, false positive, and false negative.
+negative. LIME described the same output of the EGBE with 1500
+perturbed samples and returned the top 10 most influential features.
+each instance.
+
+Four complementary criteria were used for measuring the SHAP--LIME agreement.
+Within the local school area, the number of features that were shared with each other was recorded as feature agreement.
+the two top-10 lists; the Jaccard score measured the intersection of the two lists.
+in comparison to their marriage. The consistency was assessed using Spearman correlation.
+The common features were given the same rank in the rankings. Sign agreement
+determined if SHAP and LIME gave the same sign of the model change (positive or negative).
+A path that leads to common features having non-zero explanation values.
+
+The following list shows the ten explanations LIME created for a
+a representative example of each type of confusion available
+different random seeds. All pairs of repeated explanations were
+Agreement between the two compared using “feature agreement”, “Jaccard similarity”, “Rank correlation”,
+They consented to sign the agreement and mean values were reported.
+
+Lastly, the cross-context SHAP consistency was assessed from the
+65-dimensional normalized feature-importance profiles. Pairwise
+Spearman correlation between release level profiles were computed.
+and at the project level profiles, each project profile being
+The average of its release level importance values. This analysis
+assessed if the features deemed important by EGBE were still
+available in all releases and projects.
+
+% ==================================================
+% V. EXPERIMENTAL DESIGN
+% ==================================================
+\section{Experimental Design}
+
+\subsection{Within-Project Defect Prediction}
+\label{subsec:wpdp}
+
+Each of the following projects was independently used for within project defect prediction (WPDP):Within project defect prediction (WPDP) was conducted independently on each of the following projects:
+For each of 32 releases. A stratified sample was used to divide each release.
+Split the data with a fixed random seed of 42, with 80% in training data and 20% in test data. The
+The ratio of clean and defective was maintained.
+instances of both partitions. Row numbers were generated and stored in
+All WPDP experiments were performed with the same reused to provide a consistent comparison.
+
+All development operations were done within the \(80\%\) training
+partition. These operations were fold-wise feature rank-ing,
+feature-configuration evaluation, class-imbalance strategy selection,
+hyperparameter optimization, ensemble construction and OOF threshold.
+optimization. The decisions are corrected and XGBoost, LightGBM and
+CatBoost were refitted on the complete training partition, and their
+Equal soft voting was used for combining probabilities. The fixed
+Then the probabilities were subjected to the OOF selected threshold.
+for the untouched \(20\%\) test partition. Test labels were used only
+To compute the final evaluation metrics and did not impact any of the
+model-development decision.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]
+    {Aggregate_WPDP_Confusion_Matrix.png}
+    \caption{Aggregate confusion matrix of the proposed EGBE framework under
+    within-project defect prediction (WPDP). The matrix summarizes the pooled
+    true-positive, true-negative, false-positive, and false-negative predictions
+    across the evaluated WPDP test partitions.}
+    \label{fig:wpdp-confusion-matrix}
+\end{figure}
+
+\subsection{Temporal Cross-Release Defect Prediction}
+\label{subsec:crdp}
+
+Temporal cross-release defect prediction (CRDP) was done independently
+Within each of the nine projects. For each target release, all
+Older versions of the same project were merged into a single entity:
+The later release has been discarded as the source-training data.
+unseen target. The first release of each project was not able to act as a
+No earlier release was available and so it has been kept as target. Consequently, the
+Those 32 releases resulted in 23 target-release tasks for protocol.
+
+Only releases from the historical source were used for model development. Original
+and source-sensitive learning were compared using source-only
+Validation, modelspecific decision threshold were selected from
+The resulting validation probabilities are shown. The model parameters shown here are fixed.
+Then they employed to train XGBoost, LightGBM, CatBoost and the equal
+soft-voting EGBE using all the available historical data prior to prediction
+target release. The Mean temperatures were predicted from the present, no previous release was used to predict an earlier.
+were only after accessed by release, and target-release labels were only after
+To use prediction to estimate the ultimate evaluation measures.
+
+\subsection{Strict Leave-One-Project-Out Cross-Project Prediction}
+\label{subsec:lopo-cpdp}
+
+The test of strict cross-project defect prediction was performed with a
+leave-one-project-out protocol. For each experimental trial, one of
+the nine projects, including all of its releases, was retained as the
+unseen target project. The remaining eight projects were combined to
+Develop a source of data for their form. This was repeated until all of the data had been processed.
+The target had been the project before.
+
+Only the eight source models were used for the model configuration.
+Projects created with leave-one-source-project-out validation. This validation
+was used for the selection of the class-imbalance strategy, domain-adaptation
+Model-specific decision thresholds, method. After fixing these
+Here, the models were trained on all the source data, then applied to.
+To forecast the "held out" project. Labels not used to identify target projects.
+For training, optimizing threshold or selection of configuration; they
+were only accessed after prediction to calculate project-level and
+release-level evaluation metrics.
+
+\subsection{Domain-Adaptation Methods}
+\label{subsec:domain-adaptation}
+
+Three cross-project configurations were compared: Baseline, CORAL, and
+NNFilter. The Baseline configuration trained the models on all available
+source-project instances without feature-distribution alignment or
+source-instance filtering. It therefore represented direct transfer
+from the eight source projects to the unseen target project.
+
+CORAL aligned the covariance structure of the source features with that
+of the target features. The source and target matrices were first
+centred, after which the source data were whitened using the inverse
+square root of the source covariance matrix and recoloured using the
+square root of the target covariance matrix. A regularization value of
+\(\varepsilon=10^{-5}\) was added to the covariance matrices for
+numerical stability. CORAL used only the target-feature values and did
+not access the target labels.
+
+NNFilter selected source instances that were most similar to the
+unlabeled target instances. Standardization and a 10-component PCA
+transformation were fitted on the source data and then applied to the
+target data. For each target reference, the ten nearest source instances
+were identified, and the unique selected source rows were used for model
+training with their original feature values. For large target projects,
+a reproducible sample of at most 2,000 target instances was used as the
+reference set.
+
+The three configurations were compared through
+leave-one-source-project-out validation, and the selected method was
+subsequently applied to the actual target project. Thus, CORAL and
+NNFilter were treated as transductive unsupervised adaptation methods:
+they could use unlabeled target features, but target labels were never
+used for adaptation or method selection.
+
+\subsection{Evaluation Metrics}
+\label{subsec:evaluation-metrics}
+
+Model performance was evaluated using accuracy, precision, recall,
+F1-score, Matthews correlation coefficient (MCC), balanced accuracy,
+ROC-AUC, and PR-AUC. Let \(TP\), \(TN\), \(FP\), and \(FN\) denote
+true positives, true negatives, false positives, and false negatives,
+respectively. The threshold-dependent metrics were calculated as
+
+\begin{align}
+\mathrm{Accuracy}
+&=
+\frac{TP+TN}{TP+TN+FP+FN},
+\\
+\mathrm{Precision}
+&=
+\frac{TP}{TP+FP},
+\\
+\mathrm{Recall}
+&=
+\frac{TP}{TP+FN},
+\\
+\mathrm{F1}
+&=
+\frac{
+2\,\mathrm{Precision}\,\mathrm{Recall}
+}{
+\mathrm{Precision}+\mathrm{Recall}
+},
+\\
+\Delta
+&=
+(TP+FP)(TP+FN)
+\nonumber\\
+&\quad\times(TN+FP)(TN+FN),
+\nonumber\\
+\mathrm{MCC}
+&=
+\frac{TP\cdot TN-FP\cdot FN}{\sqrt{\Delta}},
+\\
+\mathrm{BAcc}
+&=
+\frac{1}{2}
+\left(
+\frac{TP}{TP+FN}
++
+\frac{TN}{TN+FP}
+\right).
+\end{align}
+
+Accuracy measures the proportion of correctly classified instances.
+Precision represents the proportion of predicted defects that were
+actually defective, whereas recall measures the proportion of actual
+defects correctly detected. F1-score provides the harmonic mean of
+precision and recall. Balanced accuracy (\(\mathrm{BAcc}\)) gives equal
+importance to the defective and clean classes.
+
+ROC-AUC measures the ranking performance of the predicted probabilities
+across all classification thresholds using the true-positive and
+false-positive rates. PR-AUC summarizes the precision--recall trade-off
+and is particularly informative when evaluating the minority defective
+class.
+
+MCC was selected as the primary metric because the dataset was highly
+imbalanced. Only 7,180 of the 73,395 instances were defective, resulting
+in an overall defect rate of \(9.78\%\). Under this distribution, a
+model could obtain high accuracy by favouring the majority clean class.
+MCC incorporates all four confusion-matrix components and produces a
+high value only when the model performs well on both classes. The
+remaining metrics were therefore used as complementary measures of
+predictive performance.
+
+\subsection{Statistical Analysis}
+\label{subsec:statistical-analysis}
+
+Non-parametric statistical tests were applied to the MCC values because
+the same releases or projects were evaluated by multiple models. The
+Friedman test was first used as an omnibus test to determine whether the
+models exhibited significantly different performance. This analysis was
+conducted at both the release level and the equal-project level, where
+release results were first averaged within each project. Statistical
+significance was assessed using \(\alpha=0.05\).
+
+Paired comparisons were subsequently performed using the two-sided
+Wilcoxon signed-rank test. This test examined whether the paired MCC
+differences between two configurations were centred around zero without
+assuming normally distributed differences. Comparisons were performed
+only on matched experimental units. When all paired differences were
+zero, the comparison was assigned a \(p\)-value of 1.
+
+The Holm procedure was applied to the Wilcoxon \(p\)-values to control
+the family-wise error rate across multiple comparisons. A comparison
+was considered statistically significant when its Holm-adjusted
+\(p\)-value was below 0.05. Rank-biserial correlation was also reported
+as the paired effect size:
+
+\begin{equation}
+r_{\mathrm{rb}} =
+\frac{W^{+}-W^{-}}{W^{+}+W^{-}},
+\end{equation}
+
+where \(W^{+}\) and \(W^{-}\) denote the sums of the positive and
+negative signed ranks, respectively. Its sign indicates the direction
+of the difference, while its absolute value represents the magnitude of
+the effect.
+
+Finally, \(95\%\) bootstrap confidence intervals for mean MCC were
+estimated using 20,000 resamples with replacement and a random seed of
+42. The interval bounds were defined by the 2.5th and 97.5th percentiles
+of the bootstrap distribution. Confidence intervals were calculated for
+both release-weighted means and equal-project-weighted means.
+
+\subsection{Implementation and Reproducibility Details}
+\label{subsec:implementation}
+
+All experiments were implemented in Python 3.12.13 within a
+Kaggle-hosted notebook environment. The principal software packages
+were NumPy 2.0.2, pandas 2.3.3, scikit-learn 1.6.1, SciPy 1.16.3,
+XGBoost 3.2.0, LightGBM 4.6.0, CatBoost 1.2.10, Optuna 4.9.0, and SHAP
+0.51.0. Imbalanced-learn was used for SMOTE and ADASYN, while LIME was
+used for local explanation and stability analysis.
+
+A global random seed of 42 was used for data splitting,
+cross-validation, model initialization, Optuna sampling, resampling,
+and XAI instance selection. WPDP employed a stratified \(80{:}20\)
+outer train--test split and five-fold stratified OOF evaluation.
+Hyperparameter optimization used three-fold stratified
+cross-validation with 12 trials per base learner, while the corrected
+ensemble-weight analysis used five-fold meta-level cross-validation.
+Decision thresholds were searched from 0.05 to 0.95 using an increment
+of 0.01.
+
+For reproducibility, the row indices of every outer split were saved and
+reused across the WPDP experiments. Release-level feature rankings,
+selected configurations, optimized hyperparameters, thresholds, model
+probabilities, evaluation metrics, and experiment metadata were
+exported to structured CSV and JSON files. Intermediate checkpoints
+were also generated for every release and protocol. The temporal CRDP
+release order and the project-level leave-one-project-out assignments
+were explicitly defined to ensure that the same evaluation tasks could
+be reconstructed in subsequent runs.
+
+% ==================================================
+% VI. RESULTS
+% ==================================================
+\section{Results}
+
+\subsection{Dataset and Class-Distribution Analysis}
+\label{subsec:dataset-class-distribution}
+
+The experimental dataset contained 73,395 instances collected from
+32 releases of nine open-source software projects. Each instance was
+represented by 65 software metrics. As summarized in
+Table~\ref{tab:dataset-distribution}, 66,215 instances were clean,
+whereas 7,180 instances were defective. Thus, defective instances
+accounted for only \(9.78\%\) of the complete dataset, indicating a
+substantial class imbalance.
+
+\begin{table}[H]
+\centering
+\caption{Overall Dataset and Class Distribution}
+\label{tab:dataset-distribution}
+\begin{tabular}{lr}
+\hline
+\textbf{Dataset characteristic} & \textbf{Value} \\
+\hline
+Projects                    & 9 \\
+Software releases           & 32 \\
+Total instances             & 73,395 \\
+Software metrics            & 65 \\
+Clean instances             & 66,215 (90.22\%) \\
+Defective instances         & 7,180 (9.78\%) \\
+Instances per release       & 731--8,846 \\
+Release-level defect rate   & 2.17\%--33.67\% \\
+\hline
+\end{tabular}
+\end{table}
+
+The class distribution also varied considerably across the individual
+releases. The lowest defect rate was \(2.17\%\) in Camel~2.11.0,
+whereas the highest rate was \(33.67\%\) in Derby~10.2.1.6. The
+unweighted mean and median defect rates across the 32 releases were
+\(12.68\%\) and \(10.82\%\), respectively. This variation shows that
+the severity of class imbalance differed substantially among the
+evaluation releases.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{R32.png}
+    \caption{Defect-rate distribution across the 32 software releases.}
+    \label{fig:defect-rate-distribution}
+\end{figure}
+
+As illustrated in Fig.~\ref{fig:defect-rate-distribution}, clean
+instances formed the majority class in the overall dataset, while the
+proportion of defective instances changed across releases. Therefore,
+performance was not interpreted using accuracy alone; MCC, balanced
+accuracy, and PR-AUC were also considered to account for the observed
+class imbalance.
+
+\subsection{Feature-Set Ablation Results}
+\label{subsec:feature-ablation}
+
+Table~\ref{tab:feature-ablation} compares the feature configurations
+on the untouched outer test partitions of the 32 releases. The reported
+threshold-dependent metrics were calculated using the corresponding
+OOF-optimized thresholds.
+
+\begin{table}[H]
+\caption{Feature-Set Ablation Results Across 32 Releases}
+\label{tab:feature-ablation}
+\centering
+\setlength{\tabcolsep}{2.2pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccccccc}
+\hline
+\textbf{Set} &
+\textbf{Acc.} &
+\textbf{Prec.} &
+\textbf{Rec.} &
+\textbf{F1} &
+\textbf{MCC} &
+\textbf{BAcc.} &
+\textbf{ROC} &
+\textbf{PR} \\
+\hline
+All65 &
+\textbf{0.8894} &
+0.5173 &
+\textbf{0.5439} &
+\textbf{0.5161} &
+\textbf{0.4592} &
+\textbf{0.7371} &
+\textbf{0.8636} &
+\textbf{0.5465} \\
+
+Top30 &
+0.8870 &
+\textbf{0.5193} &
+0.4683 &
+0.4682 &
+0.4154 &
+0.7004 &
+0.8588 &
+0.5253 \\
+
+Top20 &
+0.8811 &
+0.5027 &
+0.4823 &
+0.4684 &
+0.4121 &
+0.7044 &
+0.8536 &
+0.5099 \\
+
+Top15 &
+0.8740 &
+0.4794 &
+0.4935 &
+0.4638 &
+0.4033 &
+0.7058 &
+0.8450 &
+0.4999 \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+All65 achieved the best overall performance, including the highest
+accuracy, recall, F1-score, MCC, balanced accuracy, ROC-AUC, and
+PR-AUC. Its mean MCC was \(0.4592\), with a standard deviation of
+\(0.1462\). Although Top30 produced a marginally higher precision
+(\(0.5193\) compared with \(0.5173\)), it performed worse on all other
+reported metrics.
+
+Reducing the feature set also caused a progressive decline in the
+primary metric. Compared with All65, the mean MCC decreased by
+\(0.0437\), \(0.0471\), and \(0.0559\) for Top30, Top20, and Top15,
+respectively. A similar pattern was observed for PR-AUC, which decreased
+from \(0.5465\) with All65 to \(0.5253\), \(0.5099\), and \(0.4999\)
+with the reduced feature sets.
+
+The development-stage OOF results showed the same ordering. The mean
+OOF MCC values were \(0.4839\), \(0.4711\), \(0.4639\), and \(0.4619\)
+for All65, Top30, Top20, and Top15, respectively. Furthermore, All65
+was selected in 21 of the 32 release-level evaluations
+(\(65.63\%\)). These results indicate that the complete feature set
+retained complementary information that was lost in the reduced
+configurations. Therefore, All65 was retained as the primary feature
+configuration for the subsequent experiments.
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=0.92\textwidth]
+    {06_Feature_Selection_Ablation.png}
+    \caption{Feature-set ablation analysis comparing the complete
+    \textit{All65} configuration with the reduced \textit{Top30},
+    \textit{Top20}, and \textit{Top15} feature subsets. The complete
+    feature representation achieves the strongest overall predictive
+    performance, indicating that progressively removing lower-ranked
+    predictors eliminates complementary information useful for software
+    defect discrimination.}
+    \label{fig:feature-selection-ablation}
+\end{figure*}
+
+\subsection{Within-Project Model Comparison}
+\label{subsec:wpdp-model-comparison}
+
+Table~\ref{tab:wpdp-model-comparison} presents the mean performance
+of the base learners and ensemble configurations across the 32
+within-project test partitions. All results were obtained from the
+untouched test sets using decision thresholds selected from the
+corresponding training-side OOF predictions.
+
+\begin{table}[H]
+\caption{Within-Project Model Comparison Across 32 Releases}
+\label{tab:wpdp-model-comparison}
+\centering
+\setlength{\tabcolsep}{2.0pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccccccc}
+\hline
+\textbf{Model} &
+\textbf{Acc.} &
+\textbf{Prec.} &
+\textbf{Rec.} &
+\textbf{F1} &
+\textbf{MCC} &
+\textbf{BAcc.} &
+\textbf{ROC} &
+\textbf{PR} \\
+\hline
+XGBoost &
+0.8851 & 0.5164 & 0.5064 & 0.4930 &
+0.4350 & 0.7169 & 0.8562 & 0.5258 \\
+
+LightGBM &
+0.8841 & 0.4994 & 0.5078 & 0.4911 &
+0.4296 & 0.7162 & 0.8566 & 0.5317 \\
+
+CatBoost &
+\textbf{0.8900} &
+\textbf{0.5339} &
+\textbf{0.5290} &
+\textbf{0.5111} &
+\textbf{0.4566} &
+\textbf{0.7291} &
+0.8569 &
+0.5373 \\
+
+EGBE-Equal &
+0.8882 & 0.5151 & 0.5223 & 0.5068 &
+0.4469 & 0.7259 &
+\textbf{0.8626} &
+\textbf{0.5435} \\
+
+EGBE-Weighted &
+0.8882 & 0.5098 & 0.5128 & 0.5013 &
+0.4402 & 0.7213 & 0.8623 & 0.5375 \\
+
+EGBE-Stacked &
+0.8872 & 0.5084 & 0.5218 & 0.5004 &
+0.4416 & 0.7247 & 0.8613 & 0.5400 \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+Among the individual learners, CatBoost achieved the highest observed
+mean MCC of \(0.4566\), followed by XGBoost with \(0.4350\) and
+LightGBM with \(0.4296\). CatBoost also obtained the highest accuracy,
+precision, recall, F1-score, and balanced accuracy. Its MCC standard
+deviation across the releases was \(0.1424\), compared with \(0.1504\)
+for EGBE-Equal.
+
+Among the three ensemble configurations, EGBE-Equal produced the
+strongest overall performance. It achieved an MCC of \(0.4469\),
+exceeding EGBE-Weighted and EGBE-Stacked by \(0.0067\) and \(0.0053\),
+respectively. EGBE-Equal also obtained the highest ROC-AUC
+(\(0.8626\)) and PR-AUC (\(0.5435\)) among all evaluated models,
+indicating stronger probability-ranking performance under the
+imbalanced class distribution.
+
+Although CatBoost produced a higher observed test MCC than EGBE-Equal,
+the final ensemble was not selected using test performance. After
+correcting the optimistic weighted-ensemble evaluation through
+cross-fitting, the development OOF MCC values were \(0.4947\) for
+EGBE-Equal, \(0.4924\) for cross-fitted EGBE-Weighted, and \(0.4900\)
+for EGBE-Stacked. Therefore, EGBE-Equal was retained as the final
+ensemble configuration using development data only.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\columnwidth]
+    {05_WPDP_Model_MCC_Comparison.png}
+    \caption{Within-project MCC comparison of the base learners and EGBE configurations across 32 releases.}
+    \label{fig:wpdp-model-comparison}
+\end{figure}
+
+\subsection{Threshold-Optimization Results}
+\label{subsec:threshold-results}
+
+The effect of OOF threshold optimization was evaluated using the All65
+within-project configuration. Table~\ref{tab:threshold-comparison}
+compares the mean performance obtained with the default threshold of
+\(0.50\) and the thresholds selected by maximizing MCC on the
+training-side OOF predictions. The final test labels were not accessed
+during threshold selection.
+
+\begin{table}[H]
+\caption{Default and OOF-Optimized Threshold Performance}
+\label{tab:threshold-comparison}
+\centering
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lccc}
+\hline
+\textbf{Metric} &
+\textbf{Default} &
+\textbf{Optimized} &
+\textbf{Difference} \\
+\hline
+Accuracy          & \textbf{0.9067} & 0.8894 & $-0.0172$ \\
+Precision         & \textbf{0.6612} & 0.5173 & $-0.1439$ \\
+Recall            & 0.3436 & \textbf{0.5439} & $+0.2003$ \\
+F1-score          & 0.4247 & \textbf{0.5161} & $+0.0914$ \\
+MCC               & 0.4118 & \textbf{0.4592} & $+0.0473$ \\
+Balanced accuracy & 0.6575 & \textbf{0.7371} & $+0.0796$ \\
+ROC-AUC           & 0.8636 & 0.8636 & $0.0000$ \\
+PR-AUC            & 0.5465 & 0.5465 & $0.0000$ \\
+\hline
+\end{tabular}
+\end{table}
+
+The optimized thresholds increased the mean MCC from \(0.4118\) to
+\(0.4592\), corresponding to an absolute improvement of \(0.0473\).
+MCC improved for 22 of the 32 releases and decreased for the remaining
+10 releases, with no ties. The mean selected threshold was \(0.2375\),
+while the median was \(0.195\). The release-specific thresholds ranged
+from \(0.07\) to \(0.61\), demonstrating that the default threshold of
+\(0.50\) was not optimal for most releases.
+
+Threshold optimization reduced mean accuracy and precision but
+substantially increased recall from \(0.3436\) to \(0.5439\).
+Consequently, F1-score and balanced accuracy improved by \(0.0914\)
+and \(0.0796\), respectively. This trade-off indicates that the default
+threshold favoured the majority clean class, whereas the optimized
+thresholds detected a larger proportion of defective instances.
+ROC-AUC and PR-AUC remained unchanged because they were calculated
+from predicted probabilities and do not depend on a single
+classification threshold.
+
+A two-sided Wilcoxon signed-rank test on the paired release-level MCC
+values produced \(p=0.003379\), showing that the improvement was
+statistically significant at \(\alpha=0.05\). The corresponding
+rank-biserial effect size was \(0.5795\), indicating a substantial
+positive effect of OOF threshold optimization on within-project MCC.
+The effect of OOF threshold optimization is illustrated in
+Fig.~\ref{fig:threshold-calibration}.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\columnwidth]
+    {07_WPDP_Threshold_Calibration.png}
+    \caption{Comparison of default and OOF-optimized threshold performance under the within-project protocol.}
+    \label{fig:threshold-calibration}
+\end{figure}
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=0.82\textwidth]
+    {Combined_Protocol_ROC.png}
+    \caption{Receiver operating characteristic (ROC) curves of the proposed
+    EGBE framework across the three evaluation protocols. The pooled ROC-AUC
+    values are 0.875 for within-project defect prediction (WPDP), 0.788 for
+    temporal cross-release defect prediction (CRDP), and 0.821 for strict
+    cross-project defect prediction (CPDP).}
+    \label{fig:combined-roc}
+\end{figure*}
+
+\subsection{Temporal Cross-Release Generalization}
+\label{subsec:temporal-generalization}
+
+The temporal cross-release evaluation contained 23 target releases
+from the nine projects. For each target release, only chronologically
+earlier releases of the same project were used for model development.
+Table~\ref{tab:crdp-performance} summarizes the performance of the
+final EGBE-Equal model on the unseen later releases.
+
+\begin{table}[H]
+\caption{Temporal Cross-Release Performance of EGBE-Equal}
+\label{tab:crdp-performance}
+\centering
+\setlength{\tabcolsep}{7pt}
+\begin{tabular}{lclc}
+\hline
+\textbf{Metric} & \textbf{Value} &
+\textbf{Metric} & \textbf{Value} \\
+\hline
+Accuracy          & 0.8503 & F1-score  & 0.3696 \\
+Precision         & 0.4049 & MCC       & 0.3227 \\
+Recall            & 0.4683 & BAcc.     & 0.6764 \\
+ROC-AUC           & 0.8108 & PR-AUC    & 0.3966 \\
+\hline
+\end{tabular}
+\end{table}
+
+EGBE-Equal achieved a mean MCC of \(0.3227\), with a standard
+deviation of \(0.1188\), under the temporal protocol. Among the
+individual learners, CatBoost obtained the highest observed MCC of
+\(0.3258\), followed closely by XGBoost with \(0.3225\). LightGBM
+achieved an MCC of \(0.3090\). Although EGBE-Equal did not produce the
+highest MCC, it achieved the highest ROC-AUC of \(0.8108\) among the
+evaluated temporal models.
+
+For a direct comparison, the within-project and temporal results were
+matched using the same 23 target releases. The mean within-project MCC
+was \(0.4015\), whereas the temporal cross-release MCC was \(0.3227\).
+Thus, temporal prediction reduced MCC by \(0.0788\). Within-project
+prediction performed better on 16 target releases, while temporal
+prediction performed better on seven. A two-sided Wilcoxon signed-rank
+test produced \(p=0.004851\), indicating a statistically significant
+difference between the two protocols.
+
+The same pattern was observed when each project was given equal
+weight. The mean project-level MCC decreased from \(0.4078\) under
+within-project prediction to \(0.3272\) under temporal prediction,
+corresponding to a reduction of \(0.0807\). Temporal prediction
+produced a lower mean MCC for all nine projects, and the project-level
+Wilcoxon test was also significant (\(p=0.003906\)). These results
+show that predicting chronologically later releases was more difficult
+than predicting instances sampled from the same release.
+
+The transfer of source-selected decision thresholds did not improve
+temporal performance. The default-threshold MCC was \(0.3307\),
+compared with \(0.3227\) using source-optimized thresholds. The mean
+difference was \(-0.0080\), and the result was not statistically
+significant (\(p=0.8484\)). This finding indicates that thresholds
+optimized on earlier releases did not consistently transfer to later
+releases.
+
+\subsection{Strict Cross-Project Generalization}
+\label{subsec:strict-cpdp-results}
+
+The strict leave-one-project-out evaluation contained nine iterations.
+In each iteration, one complete project was retained as the unseen
+target, while the remaining eight projects were used for model
+development. Source-only validation selected the Baseline transfer
+configuration for all nine target projects. Table~\ref{tab:cpdp-project-results}
+reports the project-level performance of EGBE-Equal under this
+configuration.
+
+\begin{table}[H]
+\caption{Strict LOPO Cross-Project Performance}
+\label{tab:cpdp-project-results}
+\centering
+\setlength{\tabcolsep}{2.7pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccccc}
+\hline
+\textbf{Target} &
+\textbf{Acc.} &
+\textbf{F1} &
+\textbf{MCC} &
+\textbf{BAcc.} &
+\textbf{ROC} &
+\textbf{PR} \\
+\hline
+ActiveMQ & 0.9023 & 0.4458 & 0.3951 & 0.6808 & 0.8157 & 0.4572 \\
+Camel    & \textbf{0.9468} & 0.3133 & 0.2868 & 0.6546 & 0.8241 & 0.2514 \\
+Derby    & 0.8145 & 0.4998 & \textbf{0.4411} & 0.6667 & 0.8205 & \textbf{0.6632} \\
+Groovy   & 0.8916 & 0.3805 & 0.3319 & 0.6997 & 0.8090 & 0.3695 \\
+HBase    & 0.6982 & \textbf{0.5200} & 0.3397 & 0.6947 & 0.7463 & 0.5579 \\
+Hive     & 0.8267 & 0.3973 & 0.3056 & 0.6765 & 0.7873 & 0.3730 \\
+JRuby    & 0.8080 & 0.4164 & 0.3662 & \textbf{0.7597} & \textbf{0.8448} & 0.4760 \\
+Lucene   & 0.7612 & 0.3599 & 0.2671 & 0.6825 & 0.7643 & 0.2803 \\
+Wicket   & 0.8059 & 0.2854 & 0.2826 & 0.7530 & 0.8281 & 0.3481 \\
+\hline
+\textbf{Mean} &
+\textbf{0.8284} &
+\textbf{0.4021} &
+\textbf{0.3351} &
+\textbf{0.6965} &
+\textbf{0.8045} &
+\textbf{0.4196} \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+Across the nine unseen target projects, EGBE-Equal achieved a mean
+accuracy of \(0.8284\), precision of \(0.3730\), recall of \(0.5261\),
+and F1-score of \(0.4021\). The mean MCC was \(0.3351\), with a
+standard deviation of \(0.0575\). The corresponding balanced accuracy,
+ROC-AUC, and PR-AUC values were \(0.6965\), \(0.8045\), and \(0.4196\),
+respectively.
+
+Performance varied across the target projects. Derby achieved the
+highest MCC of \(0.4411\) and the highest PR-AUC of \(0.6632\), while
+Lucene produced the lowest MCC of \(0.2671\). HBase achieved the
+highest F1-score of \(0.5200\), whereas JRuby obtained the highest
+balanced accuracy and ROC-AUC, with values of \(0.7597\) and \(0.8448\),
+respectively. Camel produced the highest accuracy of \(0.9468\), but
+its MCC was only \(0.2868\), illustrating that accuracy alone could
+overstate performance on highly imbalanced target data.
+
+These findings show that the model retained useful predictive ability
+when transferred to completely unseen projects, although its
+effectiveness depended on the characteristics of the target project.
+No target-project labels were used for model training, threshold
+selection, imbalance-strategy selection, or transfer-configuration
+selection.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\columnwidth]{02_Protocol_MCC.png}
+    \caption{MCC comparison across the within-project, temporal cross-release, and strict cross-project evaluation protocols.}
+    \label{fig:protocol-mcc}
+\end{figure}
+
+\subsection{Domain-Adaptation Results}
+\label{subsec:domain-adaptation-results}
+
+The Baseline, CORAL, and NNFilter configurations were compared under
+the strict leave-one-project-out protocol. CORAL and NNFilter were
+allowed to access the unlabeled feature values of the target project,
+whereas the Baseline configuration directly transferred the models
+trained on the source projects. No target-project labels were used by
+any configuration. The results are presented in
+Table~\ref{tab:domain-adaptation-results}.
+
+\begin{table}[H]
+\caption{Comparison of Cross-Project Domain-Adaptation Methods}
+\label{tab:domain-adaptation-results}
+\centering
+\setlength{\tabcolsep}{2.2pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccccccc}
+\hline
+\textbf{Method} &
+\textbf{Acc.} &
+\textbf{Prec.} &
+\textbf{Rec.} &
+\textbf{F1} &
+\textbf{MCC} &
+\textbf{BAcc.} &
+\textbf{ROC} &
+\textbf{PR} \\
+\hline
+Baseline &
+0.8284 &
+0.3730 &
+0.5261 &
+\textbf{0.4021} &
+\textbf{0.3351} &
+\textbf{0.6965} &
+\textbf{0.8045} &
+\textbf{0.4196} \\
+
+CORAL &
+\textbf{0.8553} &
+\textbf{0.4011} &
+0.3827 &
+0.3428 &
+0.2945 &
+0.6552 &
+0.7846 &
+0.3734 \\
+
+NNFilter &
+0.8205 &
+0.3396 &
+\textbf{0.5292} &
+0.3803 &
+0.3132 &
+0.6955 &
+0.7912 &
+0.3999 \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+The Baseline configuration achieved the highest mean MCC of \(0.3351\),
+followed by NNFilter with \(0.3132\) and CORAL with \(0.2945\).
+Baseline also obtained the highest F1-score, balanced accuracy,
+ROC-AUC, and PR-AUC. NNFilter produced the highest recall
+(\(0.5292\)), although this improvement was accompanied by lower
+precision and MCC. CORAL achieved the highest accuracy and precision,
+but its recall decreased to \(0.3827\), resulting in the lowest
+F1-score and balanced accuracy among the three configurations.
+
+Relative to Baseline, the mean MCC decreased by \(0.0406\) with CORAL
+and by \(0.0219\) with NNFilter. Each adaptation method improved MCC
+for only two of the nine target projects and reduced it for the
+remaining seven projects. After Holm correction, neither comparison
+was statistically significant. The adjusted \(p\)-values were
+\(0.2930\) for both Baseline versus CORAL and Baseline versus NNFilter.
+
+Source-only leave-one-project-out validation selected the Baseline
+configuration for all nine target projects. Therefore, the final
+strict cross-project results were reported using Baseline rather than
+CORAL or NNFilter. These findings indicate that the evaluated
+domain-adaptation methods did not provide a consistent improvement
+over direct cross-project transfer in this experiment.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\columnwidth]{04_CPDP_Domain_Adaptation.png}
+    \caption{Comparison of the baseline, CORAL, and NNFilter configurations under strict cross-project evaluation.}
+    \label{fig:cpdp-domain-adaptation}
+\end{figure}
+
+\subsection{Explainability and Reliability Results}
+\label{subsec:xai-reliability-results}
+
+Permutation SHAP was applied directly to the predicted probabilities
+of the final EGBE-Equal model across all 32 releases. The ten most
+important features according to their mean normalized absolute SHAP
+values are presented in Table~\ref{tab:global-shap-features}.
+
+\begin{table}[H]
+\caption{Top Ten Features According to Global SHAP Importance}
+\label{tab:global-shap-features}
+\centering
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{cllc}
+\hline
+\textbf{Rank} & \textbf{Feature} & \textbf{Group} &
+\textbf{Importance} \\
+\hline
+1  & Added\_lines          & Process   & 0.0687 \\
+2  & COMM                  & Process   & 0.0434 \\
+3  & Del\_lines            & Process   & 0.0424 \\
+4  & CountClassCoupled     & Code      & 0.0373 \\
+5  & OWN\_LINE             & Ownership & 0.0366 \\
+6  & MaxInheritanceTree    & Code      & 0.0288 \\
+7  & CountInput\_Mean      & Code      & 0.0269 \\
+8  & CountLineComment      & Code      & 0.0245 \\
+9  & MAJOR\_LINE           & Ownership & 0.0242 \\
+10 & RatioCommentToCode    & Code      & 0.0216 \\
+\hline
+\end{tabular}
+\end{table}
+
+Added\_lines was the most influential feature, followed by COMM and
+Del\_lines. All three were process metrics, showing that code-change
+information contributed strongly to the model predictions. The
+remaining highly ranked features included code-structure,
+inheritance, coupling, comment, input, and ownership information.
+When importance was aggregated by feature group, code metrics
+accounted for \(70.45\%\) of the total importance, followed by process
+metrics with \(18.71\%\) and ownership metrics with \(10.84\%\).
+
+The reliability of the explanations was evaluated through SHAP--LIME
+agreement, repeated LIME stability, and cross-context SHAP
+consistency. Table~\ref{tab:xai-reliability} summarizes the resulting
+agreement and stability measures.
+
+\begin{table}[H]
+\caption{Explanation Agreement and Reliability Results}
+\label{tab:xai-reliability}
+\centering
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llc}
+\hline
+\textbf{Analysis} & \textbf{Measure} & \textbf{Value} \\
+\hline
+SHAP--LIME & Feature agreement       & 0.4817 \\
+SHAP--LIME & Jaccard similarity      & 0.3302 \\
+SHAP--LIME & Rank Spearman           & 0.3668 \\
+SHAP--LIME & Sign agreement          & 0.9600 \\
+\hline
+LIME stability & Feature agreement   & 0.7175 \\
+LIME stability & Jaccard similarity  & 0.5818 \\
+LIME stability & Rank Spearman       & 0.7162 \\
+LIME stability & Sign agreement      & 0.9813 \\
+\hline
+SHAP consistency & Release-pair Spearman & 0.3513 \\
+SHAP consistency & Project-pair Spearman & 0.5040 \\
+\hline
+\end{tabular}
+\end{table}
+
+Across 104 matched local explanations, SHAP and LIME shared an average
+of \(48.17\%\) of their top-ten features. Their mean Jaccard similarity
+was \(0.3302\), while the mean rank correlation among common features
+was \(0.3668\). These values indicate partial agreement regarding
+which features were most important and how they were ranked. However,
+the mean sign agreement was \(0.9600\), showing that the two methods
+generally agreed on whether a common feature increased or decreased
+the predicted defect probability.
+
+Repeated LIME analysis was performed for 36 prediction cases using ten
+runs per case. The mean feature agreement increased to \(0.7175\), and
+the mean Jaccard similarity was \(0.5818\). The rank correlation of
+\(0.7162\) and sign agreement of \(0.9813\) indicate that repeated
+LIME explanations were comparatively stable, particularly in the
+direction of feature contributions.
+
+Cross-context SHAP consistency remained moderate. Across 496 pairs of
+releases, the mean Spearman correlation between global feature-
+importance profiles was \(0.3513\). Across the 36 project pairs, the
+mean correlation increased to \(0.5040\). Therefore, explanations were
+more consistent after aggregation at the project level, but the
+importance rankings still changed across software contexts. This
+finding indicates that the model relied on both globally influential
+features and release- or project-specific defect patterns.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\columnwidth]{01_Top15_Global_SHAP.png}
+    \caption{Top 15 globally important features identified using permutation SHAP.}
+    \label{fig:global-shap}
+\end{figure}
+
+\subsection{Statistical Test Results}
+\label{subsec:statistical-results}
+
+Table~\ref{tab:model-ranking-ci} presents the release-level and
+equal-project-weighted MCC rankings together with their \(95\%\)
+bootstrap confidence intervals. The intervals were estimated using
+20,000 bootstrap resamples.
+
+\begin{table}[H]
+\caption{Model Rankings and Bootstrap Confidence Intervals}
+\label{tab:model-ranking-ci}
+\centering
+\setlength{\tabcolsep}{2.0pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccccc}
+\hline
+\textbf{Model} &
+\textbf{Rel. MCC} &
+\textbf{Rel. Rank} &
+\textbf{Rel. 95\% CI} &
+\textbf{Proj. MCC} &
+\textbf{Proj. Rank} &
+\textbf{Proj. 95\% CI} \\
+\hline
+CatBoost &
+0.4566 & \textbf{2.813} & [0.4090, 0.5061] &
+\textbf{0.4606} & 2.889 & [0.4086, 0.5089] \\
+
+EGBE-Equal &
+0.4469 & 3.219 & [0.3967, 0.4992] &
+0.4524 & \textbf{2.778} & [0.3997, 0.5030] \\
+
+EGBE-Stacked &
+0.4416 & 3.328 & [0.3917, 0.4930] &
+0.4469 & 3.222 & [0.3927, 0.4985] \\
+
+EGBE-Weighted &
+0.4402 & 3.391 & [0.3928, 0.4896] &
+0.4447 & 3.778 & [0.3902, 0.4953] \\
+
+LightGBM &
+0.4296 & 3.906 & [0.3804, 0.4798] &
+0.4346 & 4.000 & [0.3878, 0.4785] \\
+
+XGBoost &
+0.4350 & 4.344 & [0.3834, 0.4904] &
+0.4417 & 4.333 & [0.3842, 0.5024] \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+At the release level, CatBoost achieved the highest mean MCC
+(\(0.4566\)) and the best average rank (\(2.813\)). It obtained the
+highest MCC on 13 of the 32 releases. EGBE-Equal ranked second with a
+mean MCC of \(0.4469\) and an average rank of \(3.219\). At the
+equal-project level, CatBoost retained the highest mean MCC
+(\(0.4606\)), while EGBE-Equal achieved the best average project rank
+of \(2.778\). The substantial overlap among the bootstrap confidence
+intervals indicates considerable uncertainty in the observed
+differences between the models.
+
+The release-level Friedman test produced
+\(\chi^{2}_{F}=13.6739\) with \(p=0.017819\), indicating that at least
+one model exhibited a different MCC distribution across the 32
+releases. The corresponding project-level Friedman test was not
+significant, with \(\chi^{2}_{F}=5.1270\) and \(p=0.400580\).
+
+The planned post-hoc analysis used EGBE-Weighted as the reference
+because it was selected during the initial development stage. The
+direction of \(\Delta\mathrm{MCC}\) in
+Table~\ref{tab:pairwise-statistics} is EGBE-Weighted minus the
+comparator. The final EGBE-Equal configuration was selected later,
+after the cross-fitted weight analysis corrected the optimistic
+weighted-ensemble estimate.
+
+\begin{table}[H]
+\caption{Release-Level Wilcoxon Tests Against EGBE-Weighted}
+\label{tab:pairwise-statistics}
+\centering
+\setlength{\tabcolsep}{3.2pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lrrrr}
+\hline
+\textbf{Comparator} &
+\(\boldsymbol{\Delta}\)\textbf{MCC} &
+\textbf{Raw \(p\)} &
+\textbf{Holm \(p\)} &
+\(\boldsymbol{r_{\mathrm{rb}}}\) \\
+\hline
+XGBoost      &  0.0051 & 0.0997 & 0.3990 &  0.3387 \\
+LightGBM     &  0.0106 & 0.4048 & 1.0000 &  0.1742 \\
+CatBoost     & -0.0165 & 0.0678 & 0.3392 & -0.3712 \\
+EGBE-Equal   & -0.0067 & 0.6379 & 1.0000 & -0.0985 \\
+EGBE-Stacked & -0.0014 & 0.5692 & 1.0000 & -0.1232 \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+None of the release-level pairwise comparisons remained significant
+after Holm correction. The adjusted \(p\)-values ranged from \(0.3392\)
+to \(1.0000\). The largest positive rank-biserial effect was observed
+against XGBoost (\(r_{\mathrm{rb}}=0.3387\)), whereas the comparison
+with CatBoost produced the largest negative effect
+(\(r_{\mathrm{rb}}=-0.3712\)). These effects were not accompanied by
+Holm-corrected statistical significance.
+
+The project-level pairwise results led to the same conclusion. All
+Holm-adjusted \(p\)-values were at least \(0.4883\), and none of the
+comparisons was statistically significant at \(\alpha=0.05\). The
+largest absolute project-level effect was observed between
+EGBE-Weighted and EGBE-Equal
+(\(r_{\mathrm{rb}}=-0.6444\), adjusted \(p=0.4883\)). Overall, the
+results indicate that the observed differences in average MCC were
+not sufficiently consistent across projects to establish the
+superiority of one model after multiple-comparison correction.
+
+% ==================================================
+% VII. DISCUSSION
+% ==================================================
+\section{Discussion}
+
+\subsection{Feature-Representation Findings}
+\label{subsec:feature-representation-findings}
+
+This gain is because the standard $0.50$ decision boundary does not match the highly skewed distributions~\cite{chicco2020mcc, tantithamthavorn2019optimization}[cite: 2]. The level of overall defects for the whole benchmark is as low as 9.78\% and the posterior probabilities of defects are constrained to be near the value of zero [cite: 2]. With a hard cut-off of $0.50$ most of the files are assigned to the majority of "clean" class, almost two-thirds of the defective files are not identified[cite: 2]. The mean threshold $t^*$ was therefore just fine-tuned based on the predictions given in the training stage by the oof, and it was noted that $t^* = 0.2375$ (median $0.195$), which is approximately at the density of defects in the test-set without relying on the test-labels. The consequences of not finding a defect are much more serious than the consequences of a miss in a false alarm, and therefore this is useful in software quality assurance[cite: 2].
+
+The idea of Cross Release and Cross Project Threshold Transfer.Cross release and Cross Project Threshold Transfer.
+There was clear evidence of limits to threshold transferability but there were improvements within the project in the empirical assessment; and
+\begin{enumerate}
+    Temporal Cross-Release Defect Prediction (CRDP): The defect prediction was not improved for temporally later releases using the optimized defect thresholds for temporally earlier releases [cite: 2]. For all 23 temporal targets, the mean MCC for source optimized thresholds was $0.3227$ while the mean MCC value for default kept thresholds was $0.3307$ [cite: 2]. The paired difference ($-0.0080$) was not statistically significant ($p = 0.8484$)[cite: 2]. This is an example of non-stationarity of the optimal cutoffs as the software changes over time through continuous refactoring and through the addition of new code, so the number of defects is not constant from the baseline software over time[cite: 2].
+    The mean source-calibrated thresholds MCC for nine different projects was $0.3351$ and mean Recall was $0.5261$[cite: 2]. The transfer efficacy was quite different across individual target repositories (between $0.4411$ and $0.2671$ on Derby and Lucene[cite: 2] respectively). In addition to this, there is significant covariate shift due to the structural differences, different contributions from the organizations, and different domain conventions, which makes the transfer of source thresholds not to be uniform without calibration for the target domain.
+\end{enumerate}
+
+Hence, for the purpose of answering RQ3, it is clear that the threshold value for OOF needs to be optimized in projects to correct the majority class bias. However, the optimal decision boundaries evolve over time in different repositories and releases, so there is no way for practitioners to directly take the thresholds that they used in past releases and apply them to new ones or new projects; thresholds must be optimized dynamically as per the budget of the effort required to verify projects.~\cite{tantithamthavorn2019optimization}
+
+Generalization across time and across the projects.The generalization process: Temporal & Cross-project.
+\label{subsec:temporal-and-cross-project-generalization}
+
+For chronological cross-release (CCRP) and strict cross-project (CPDP) conditions, the evaluation of EGBE is empirical, and helps answer RQ4 and RQ5, revealing the performance challenge of software evolution and domain divergence~\cite{sottomayor2024survey, turhan2009crosscompany}.
+
+A possible drop in the accuracy of cross-release prediction over time is studied.We discuss the temporal degradation in cross-release prediction.
+The overall performance of the model was much poorer when using the forward chaining CRDP setting, than when it was assessed in the project for 23 target releases. The mean MCC decreased from within-project prediction to temporal prediction, from $0.4015$ to $0.3227$ respectively, which is a decrease of $0.0788$ (Wilcoxon $p = 0.004851$) when compared on the same 23 target releases. Likewise, mean MCC (equal project weighted) was decreased from $0.4078$ to $0.3272$ ($p = 0.003906$), and temporal prediction for all 9 projects decreased. 
+
+This is because of continuous distribution shift (concept drift) that is inherent in software evolution:
+\begin{enumerate}
+    Over the various releases of a software project such as Camel~1.4.0 to Camel~2.11.0 the defect mechanisms and class proportions change considerably (from $18.81\%$ to $2.17\%$ of defects are affected)~\cite{yatish2019affected}. The decision boundaries of earlier versions don't match the later version's well-developed code base.
+    With the growth of the system, more core contributors were making patches that were more well-disciplined and well-managed, and more of these patches were found to have high code churn and high number of commits, lessening the correlation between code churn and defects.
+\end{enumerate}
+However, EGBE-Equal maintained good probabilistic ranking capacity in CRDP with the best mean ROC-AUC ($0.8108$) and mean PR-AUC ($0.3966$) across all models evaluated across the temporal dimension.
+
+One such issue is that the domain datasets of different projects are not necessarily the same.One such challenge is cross-project disparities and domain adaptation failure.
+Strict leave-one-project-out CPDP performance is viable mean MCC $0.3351$ and the mean balanced accuracy and ROC-AUC are $0.6965$ and $0.8045$ respectively for the nine software systems, when transferring without any intention to use the target labels. However, for the different projects they were found to have a significant difference with EGBE: MCC $0.4411$ on Derby, $0.3951$ on ActiveMQ, $0.2671$ on Lucene and $0.2826$ on Wicket. The differences are observed in the extreme case of covariate shift due to domain differences (such as search engines and distributed databases), architectural differences in complexity and different community structure of developers ~\cite{sottomayor2024survey, turhan2009crosscompany}.
+
+In particular, the unsupervised DA techniques were not shown to be superior to direct transfer:
+\begin{enumerate}
+    CORAL~\cite{sun2016coral} brought mean MCC down to $0.2945$ ($-0.0406$ MCC) compared to the Baseline configuration ($0.3351$ MCC), while NNFilter~\cite{turhan2009crosscompany} brought down mean MCC to $0.3132$ ($-0.0219$ MCC). Baseline performed best for the 7 out of 9 target projects on the F1 score ($0.4021$), balanced accuracy ($0.6965$), and PR-AUC ($0.4196$).
+    Gradient boosting uses the algorithm \textbf{Geometric Distortion of Tree Partitions:} to create axis-aligned decision boundaries with local thresholds of features. Linear covariance whitening in CORAL and PCA-based nearest-neighbor instance pruning in NNFilter change and remove the interactions among non-linear metrics in the local feature space used by tree ensembles, thereby effectively warping the feature space used by the tree ensembles.
+\end{enumerate}
+Hence, from RQ4 and RQ5, it can be seen that the domain of projects evolves and changes over time and this is a real constraint for the performance of the defect prediction model. In the operational scenario, a CPDP deployment without labels, ensemble transfer is more reliable than heuristic methods of domain alignment over unperturbed source distributions.
+
+\subsection{Explanation Agreement and Stability}
+\label{subsec:explanation-agreement-and-stability}
+
+Explanative analysis of the level of fidelity of the explanations, such as permutation SHAP~\cite{lundberg2017shap} and LIME~\cite{ribeiro2016lime} can reveal the most salient features that contribute to defect proneness and can measure the reliability of such post hoc explainers applied to operational data.
+
+\subsubsection{Global Metric Influence}
+Global SHAP analyses for 32 releases confirm that code churn (e.g., Added\_lines, COMM, Del\_lines) is the top ranked risk factor with frequent changes being the primary way defects are introduced into code~\cite{yatish2019affected}. When aggregated by dimension, however, static code metrics still make up $70.45\%$ of the overall attribution. This indicates that process volatility is an immediate fault risk cause, while static structural complexity is the structural background baseline vulnerability to enable defects to occur.
+
+The agreement and stability of SHAP and LIME is set.SHAP and LIME are proven to agree and be stable.
+There was a fundamental difference between local feature ranking and directional attribution, out of the 104 local explanations that were matched.
+\begin{enumerate}
+    SHAP and LIME have an almost perfect $96.00\%$ directional sign agreement despite the fact that they share only $48.17\%$ of their top-10 features due to the different mathematical formulation of the two methods~\cite{lundberg2017shap, ribeiro2016lime}. Both methods are consistent in providing information to determine whether a specific measure will positively or negatively affect the probability of defects.
+    The local stability of explainer was tested for random seeds with a sign agreement of $98.13\%$ indicating high stability for reasonable perturbation budgets. The direction of the features is quite consistent across practitioner releases, but the order of the features differ from one to the next due to context changes.
+\end{enumerate}
+
+
+\subsection{Practical Implications}
+\label{subsec:practical-implications}
+
+Our empirical findings translate into four actionable recommendations for software quality assurance (QA) teams:
+
+\begin{enumerate}
+    \item \textbf{Effort-Aware Testing via Risk Ranking:} QA managers should leverage EGBE's continuous probabilities to prioritize code reviews. By inspecting only the top $k$\% of high-risk modules, teams can maximize defect detection per developer-hour invested under constrained budgets.
+    
+    \item \textbf{Dynamic Threshold Tuning:} The $+20.03\%$ recall surge achieved via out-of-fold optimization confirms that teams must abandon static $0.50$ decision cutoffs. Thresholds must be dynamically calibrated to match the specific QA capacity and defect density of the current release.
+    
+    \item \textbf{Actionable Triage via XAI:} Given the $96.00\%$ directional agreement between local explainers, developers can confidently use XAI outputs to identify specific risk drivers (e.g., structural coupling or excessive churn) to focus their attention during manual code reviews.
+    
+    \item \textbf{Bootstrapping New Projects:} For new repositories lacking defect histories, direct cross-project ensemble transfer yields a viable baseline (MCC $0.3351$) that outperforms unsupervised domain-adaptation, enabling automated QA gates from day one.
+\end{enumerate}
+
+
+% ==================================================
+% IX. CONCLUSION AND FUTURE WORK
+% ==================================================
+\section{Conclusion and Future Work}
+\label{sec:conclusion}
+
+In this paper, we proposed EGBE, a leakage-controlled soft-voting ensemble integrating XGBoost, LightGBM, and CatBoost for software defect prediction. Evaluated across 32 releases from nine open-source Java projects, our empirical analysis demonstrated that preserving a complete multi-dimensional metric space yields the highest predictive performance. Crucially, optimizing decision boundaries via out-of-fold predictions surged defect recall by $20.03\%$ and significantly improved test MCC under severe class imbalance without inducing data leakage. While cross-release and cross-project evaluations revealed expected performance degradation due to concept drift, direct baseline transfer remained viable, outperforming unsupervised domain-adaptation techniques. Furthermore, a dual-perspective XAI audit confirmed that while SHAP and LIME exhibit moderate local rank overlap, they achieve an outstanding $96.00\%$ directional sign agreement, providing highly dependable risk guidance for code reviews.
+
+Building upon these findings, realistic directions for future work include developing dynamic, effort-aware threshold calibration mechanisms adapted to continuous inspection budgets. Additionally, hybrid architectures combining traditional metric suites with deep semantic embeddings (e.g., CodeBERT) could better capture syntactical fault mechanisms. Finally, conducting human-in-the-loop industrial validation will be essential to evaluate how directional XAI explanations influence developer trust and triage efficiency within active CI/CD pipelines.
+% ==================================================
+% OPTIONAL DECLARATIONS
+% ==================================================
+% Keep these sections only if required by the target venue.
+
+\section*{Data Availability}
+
+The raw JIRA-based defect dataset analyzed in this study is publicly accessible through the repository established by Yatish et al.~\cite{yatish2019affected} and the Large Defect Prediction Benchmark~\cite{tantithamthavorn2022benchmark}. The curated 32-release dataset, containing the standardized 65-metric predictor matrices, binary target labels, and outer train--test split index files generated in this work, is available on Kaggle at \url{https://www.kaggle.com/datasets/efrathhossainshihab/jira-defect-datasets-full} and archived in the replication repository~\cite{yatish2019affected}[cite: 1, 2].
+
+% ==================================================
+% REFERENCES
+% ==================================================
+\begin{thebibliography}{00}
+
+\bibitem{yatish2019affected}
+S. Yatish, J. Jiarpakdee, P. Thongtanunam, and
+C. Tantithamthavorn,
+``Mining software defects: Should we consider affected releases?''
+in \emph{Proc. 41st IEEE/ACM Int. Conf. Software Engineering
+(ICSE)}, 2019, pp. 654--665,
+doi: 10.1109/ICSE.2019.00075.
+
+\bibitem{ali2024ensemble}
+M. Ali \emph{et al.},
+``Software defect prediction using an intelligent
+ensemble-based model,''
+\emph{IEEE Access}, vol. 12, pp. 20376--20395, 2024,
+doi: 10.1109/ACCESS.2024.3358201.
+
+\bibitem{sottomayor2024survey}
+B. Sotto-Mayor and M. Kalech,
+``A survey on transfer learning for cross-project defect
+prediction,''
+\emph{IEEE Access}, vol. 12, pp. 93398--93425, 2024,
+doi: 10.1109/ACCESS.2024.3424311.
+
+\bibitem{li2025modelaveraging}
+T. Li, Z. Wang, and P. Shi,
+``Within-project and cross-project defect prediction based
+on model averaging,''
+\emph{Scientific Reports}, vol. 15, Art. no. 6390, 2025,
+doi: 10.1038/s41598-025-90832-4.
+
+\bibitem{haldar2024interpretable}
+S. Haldar and L. F. Capretz,
+``Interpretable software defect prediction from project
+effort and static code metrics,''
+\emph{Computers}, vol. 13, no. 2, Art. no. 52, 2024,
+doi: 10.3390/computers13020052.
+
+\bibitem{ali2023featureselection}
+M. Ali \emph{et al.},
+``Analysis of feature selection methods in software defect
+prediction models,''
+\emph{IEEE Access}, vol. 11, pp. 145954--145974, 2023,
+doi: 10.1109/ACCESS.2023.3343249.
+
+\bibitem{chen2016xgboost}
+T. Chen and C. Guestrin,
+``XGBoost: A scalable tree boosting system,''
+in \emph{Proc. 22nd ACM SIGKDD Int. Conf. Knowledge
+Discovery and Data Mining}, 2016, pp. 785--794,
+doi: 10.1145/2939672.2939785.
+
+\bibitem{ke2017lightgbm}
+G. Ke, Q. Meng, T. Finley, T. Wang, W. Chen, W. Ma,
+Q. Ye, and T.-Y. Liu,
+``LightGBM: A highly efficient gradient boosting decision
+tree,''
+in \emph{Advances in Neural Information Processing Systems},
+vol. 30, pp. 3146--3154, 2017.
+
+\bibitem{prokhorenkova2018catboost}
+L. Prokhorenkova, G. Gusev, A. Vorobev,
+A. V. Dorogush, and A. Gulin,
+``CatBoost: Unbiased boosting with categorical features,''
+in \emph{Advances in Neural Information Processing Systems},
+vol. 31, pp. 6638--6648, 2018.
+
+\bibitem{chawla2002smote}
+N. V. Chawla, K. W. Bowyer, L. O. Hall, and
+W. P. Kegelmeyer,
+``SMOTE: Synthetic minority over-sampling technique,''
+\emph{Journal of Artificial Intelligence Research},
+vol. 16, pp. 321--357, 2002,
+doi: 10.1613/jair.953.
+
+\bibitem{he2008adasyn}
+H. He, Y. Bai, E. A. Garcia, and S. Li,
+``ADASYN: Adaptive synthetic sampling approach for
+imbalanced learning,''
+in \emph{Proc. IEEE Int. Joint Conf. Neural Networks},
+2008, pp. 1322--1328,
+doi: 10.1109/IJCNN.2008.4633969.
+
+\bibitem{akiba2019optuna}
+T. Akiba, S. Sano, T. Yanase, T. Ohta, and M. Koyama,
+``Optuna: A next-generation hyperparameter optimization
+framework,''
+in \emph{Proc. 25th ACM SIGKDD Int. Conf. Knowledge
+Discovery and Data Mining}, 2019, pp. 2623--2631,
+doi: 10.1145/3292500.3330701.
+
+\bibitem{lundberg2017shap}
+S. M. Lundberg and S.-I. Lee,
+``A unified approach to interpreting model predictions,''
+in \emph{Advances in Neural Information Processing Systems},
+vol. 30, pp. 4765--4774, 2017.
+
+\bibitem{ribeiro2016lime}
+M. T. Ribeiro, S. Singh, and C. Guestrin,
+``Why should I trust you?: Explaining the predictions of
+any classifier,''
+in \emph{Proc. 22nd ACM SIGKDD Int. Conf. Knowledge
+Discovery and Data Mining}, 2016, pp. 1135--1144,
+doi: 10.1145/2939672.2939778.
+
+\bibitem{sun2016coral}
+B. Sun, J. Feng, and K. Saenko,
+``Return of frustratingly easy domain adaptation,''
+in \emph{Proc. 30th AAAI Conf. Artificial Intelligence},
+2016, pp. 2058--2065,
+doi: 10.1609/aaai.v30i1.10306.
+
+\bibitem{turhan2009crosscompany}
+B. Turhan, T. Menzies, A. B. Bener, and J. Di Stefano,
+``On the relative value of cross-company and within-company
+data for defect prediction,''
+\emph{Empirical Software Engineering}, vol. 14,
+pp. 540--578, 2009,
+doi: 10.1007/s10664-008-9103-7.
+
+\bibitem{chicco2020mcc}
+D. Chicco and G. Jurman,
+``The advantages of the Matthews correlation coefficient
+(MCC) over F1 score and accuracy in binary classification
+evaluation,''
+\emph{BMC Genomics}, vol. 21, Art. no. 6, 2020,
+doi: 10.1186/s12864-019-6413-7.
+
+\bibitem{demsar2006statistical}
+J. Dem\v{s}ar,
+``Statistical comparisons of classifiers over multiple data
+sets,''
+\emph{Journal of Machine Learning Research}, vol. 7,
+pp. 1--30, 2006.
+
+\bibitem{tantithamthavorn2019optimization}
+C. Tantithamthavorn, S. McIntosh, A. E. Hassan, and
+K. Matsumoto,
+``The impact of automated parameter optimization on defect
+prediction models,''
+\emph{IEEE Transactions on Software Engineering},
+vol. 45, no. 7, pp. 683--711, 2019,
+doi: 10.1109/TSE.2018.2794977.
+
+\end{thebibliography}
+
+\end{document}
